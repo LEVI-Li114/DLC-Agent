@@ -199,6 +199,38 @@ class WeDataImportTest(unittest.TestCase):
             },
         )
 
+    def test_derives_table_asset_from_layer_named_task(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "tasks": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "TaskId": "t_ads",
+                                    "TaskName": "ads_bill_company_1d_di",
+                                    "TaskTypeId": 32,
+                                    "OwnerUin": "100043939904",
+                                    "TaskLatestVersionStatus": "Y",
+                                },
+                                {
+                                    "TaskId": "t_check",
+                                    "TaskName": "ads_bill_company_1d_di_check",
+                                    "TaskTypeId": 32,
+                                },
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(snapshot["tasks"][0]["outputs"], ["ads_bill_company_1d_di"])
+        self.assertEqual(snapshot["tasks"][1]["outputs"], [])
+        self.assertEqual(snapshot["tables"][0]["name"], "ads_bill_company_1d_di")
+        self.assertEqual(snapshot["tables"][0]["layer"], "ads")
+        self.assertEqual(snapshot["tables"][0]["domain"], "finance")
+
     def test_maps_task_instance_time_fields(self):
         snapshot = snapshot_from_api_dump(
             {

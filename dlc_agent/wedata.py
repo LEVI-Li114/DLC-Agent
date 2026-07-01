@@ -37,9 +37,19 @@ def import_wedata_snapshot(store, snapshot):
 
 
 def snapshot_from_api_dump(dump):
+    tasks = [_task_from_api(item) for item in _items(dump.get("tasks", {}))]
+    tables = [_table_from_api(item) for item in _items(dump.get("tables", {}))]
+    existing_tables = {table["name"] for table in tables if table["name"]}
+    for task in tasks:
+        table_name = _derived_output_table(task["name"])
+        if table_name and not task["outputs"]:
+            task["outputs"] = [table_name]
+        if table_name and table_name not in existing_tables:
+            tables.append(_table_from_task(task, table_name))
+            existing_tables.add(table_name)
     return {
-        "tables": [_table_from_api(item) for item in _items(dump.get("tables", {}))],
-        "tasks": [_task_from_api(item) for item in _items(dump.get("tasks", {}))],
+        "tables": tables,
+        "tasks": tasks,
         "task_instances": [_task_instance_from_api(item) for item in _items(dump.get("task_instances", {}))],
         "data_sources": [_data_source_from_api(item) for item in _items(dump.get("data_sources", {}))],
         "lineage": [_lineage_from_api(item) for item in _items(dump.get("lineage", {}))],
@@ -108,6 +118,42 @@ def _task_from_api(item):
         "inputs": _get(item, "Inputs", "InputTables", "inputs", default=[]),
         "outputs": _get(item, "Outputs", "OutputTables", "outputs", default=[]),
     }
+
+
+def _derived_output_table(task_name):
+    name = (task_name or "").strip()
+    for prefix in ("build_", "etl_", "sync_"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    if name.endswith(("_check", "_kafka", "_back", "_bak", "_tmp", "_test")):
+        return ""
+    if name.split("_", 1)[0] in {"ods", "dim", "dwd", "dws", "ads"}:
+        return name
+    return ""
+
+
+def _table_from_task(task, table_name):
+    tokens = table_name.lower().split("_")
+    return {
+        "name": table_name,
+        "database": "",
+        "layer": tokens[0],
+        "domain": _domain_from_tokens(tokens),
+        "owner": task.get("owner", ""),
+        "description": f"Derived from WeData task {task.get('name', '')}",
+    }
+
+
+def _domain_from_tokens(tokens):
+    if {"fin", "finance", "bill", "revenue", "pay", "income"} & set(tokens):
+        return "finance"
+    if {"customer", "user", "member"} & set(tokens):
+        return "customer"
+    if {"order", "trade"} & set(tokens):
+        return "order"
+    if {"biz", "business"} & set(tokens):
+        return "business"
+    return ""
 
 
 def _lineage_from_api(item):
