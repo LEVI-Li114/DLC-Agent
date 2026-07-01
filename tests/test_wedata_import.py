@@ -301,12 +301,12 @@ class WeDataImportTest(unittest.TestCase):
                             "Items": [
                                 {
                                     "TaskId": "task_001",
-                                    "InstanceId": "inst_001",
-                                    "InstanceDate": "2026-07-01",
+                                    "InstanceKey": "inst_001",
+                                    "SchedulerTime": "2026-07-01 00:00:00",
                                     "StartTime": "2026-07-01 08:00:00",
                                     "EndTime": "2026-07-01 08:03:00",
-                                    "CostTime": 180,
-                                    "Status": "success",
+                                    "CostTime": 180000,
+                                    "InstanceState": "COMPLETED",
                                 }
                             ]
                         }
@@ -316,6 +316,8 @@ class WeDataImportTest(unittest.TestCase):
         )
 
         self.assertEqual(snapshot["task_instances"][0]["duration_seconds"], 180)
+        self.assertEqual(snapshot["task_instances"][0]["instance_id"], "inst_001")
+        self.assertEqual(snapshot["task_instances"][0]["status"], "COMPLETED")
 
 
 if __name__ == "__main__":

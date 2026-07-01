@@ -181,14 +181,15 @@ def _quality_rule_from_api(item):
 
 
 def _task_instance_from_api(item):
+    cost_time = _get(item, "CostTime", default=None)
     return {
         "task_id": str(_get(item, "TaskId", "TaskID", "taskId")),
-        "instance_id": str(_get(item, "InstanceId", "InstanceID", "Id", "id")),
-        "instance_date": _get(item, "InstanceDate", "CurRunDate", "ScheduleTime", "instanceDate"),
+        "instance_id": str(_get(item, "InstanceId", "InstanceID", "InstanceKey", "Id", "id")),
+        "instance_date": _get(item, "InstanceDate", "CurRunDate", "SchedulerTime", "ScheduleTime", "instanceDate"),
         "start_time": _get(item, "StartTime", "StartDate", "startTime"),
         "end_time": _get(item, "EndTime", "EndDate", "endTime"),
-        "duration_seconds": int(_get(item, "CostTime", "CostSeconds", "DurationSeconds", "duration_seconds", default=0) or 0),
-        "status": _get(item, "Status", "State", "ExecutionStatus", "status"),
+        "duration_seconds": _duration_seconds(item, cost_time),
+        "status": _get(item, "Status", "State", "ExecutionStatus", "InstanceState", "status"),
     }
 
 
@@ -206,6 +207,12 @@ def _data_source_from_api(item):
         "description": _get(item, "Description", "Remark", "Comment", "description"),
         "config": config,
     }
+
+
+def _duration_seconds(item, cost_time):
+    if cost_time is not None:
+        return int((int(cost_time) or 0) / 1000)
+    return int(_get(item, "CostSeconds", "DurationSeconds", "duration_seconds", default=0) or 0)
 
 
 def _layer_from_name(name):

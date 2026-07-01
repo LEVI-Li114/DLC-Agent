@@ -34,8 +34,9 @@ def main():
     if os.environ.get("WEDATA_SYNC_INSTANCES") == "1":
         instance_payload = {"ProjectId": project_id}
         start_time, end_time = _instance_window()
-        instance_payload["StartTime"] = start_time
-        instance_payload["EndTime"] = end_time
+        instance_payload["ScheduleTimeFrom"] = start_time
+        instance_payload["ScheduleTimeTo"] = end_time
+        instance_payload["TimeZone"] = os.environ.get("WEDATA_INSTANCE_TIMEZONE", "UTC+8")
         instances_response = _list_all(client, "ListTaskInstances", instance_payload, page_size)
         instances_path = os.path.join(work_dir, "wedata_task_instances.json")
         with open(instances_path, "w", encoding="utf-8") as f:
@@ -58,6 +59,9 @@ def main():
 
 def _list_all(client, action, payload, page_size):
     first = client.call(action, {**payload, "PageNumber": 1, "PageSize": page_size})
+    if "Error" in first.get("Response", {}):
+        error = first["Response"]["Error"]
+        raise RuntimeError(f"{action} failed: {error.get('Code')} {error.get('Message')}")
     data = first.get("Response", {}).get("Data", {})
     total_pages = int(data.get("TotalPageNumber") or data.get("PageCount") or 1)
     items = list(data.get("Items") or [])
