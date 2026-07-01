@@ -6,6 +6,7 @@ class AssetStore:
     def __init__(self, conn):
         self.conn = conn
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("pragma busy_timeout = 30000")
 
     def init_schema(self):
         self.conn.executescript(
