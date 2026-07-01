@@ -176,7 +176,7 @@ WEDATA_SYNC_METADATA=1 WEDATA_METADATA_TABLES=ads_bill_company_1d_di,dws_360_fin
 Sync rolling task runs for yesterday and today:
 
 ```bash
-WEDATA_SYNC_INSTANCES=1 WEDATA_INSTANCE_LOOKBACK_DAYS=2 bash deploy/sync-wedata-once.sh
+WEDATA_SYNC_INSTANCES=1 WEDATA_INSTANCE_LOOKBACK_DAYS=2 WEDATA_INSTANCE_KEYWORDS=ads_bill_company_1d_di bash deploy/sync-wedata-once.sh
 ```
 
 Install a server crontab to sync every 10 minutes:

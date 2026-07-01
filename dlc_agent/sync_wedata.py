@@ -37,7 +37,10 @@ def main():
         instance_payload["ScheduleTimeFrom"] = start_time
         instance_payload["ScheduleTimeTo"] = end_time
         instance_payload["TimeZone"] = os.environ.get("WEDATA_INSTANCE_TIMEZONE", "UTC+8")
-        instances_response = _list_all(client, "ListTaskInstances", instance_payload, page_size)
+        if os.environ.get("WEDATA_INSTANCE_KEYWORDS"):
+            instance_payload["Keyword"] = os.environ["WEDATA_INSTANCE_KEYWORDS"]
+        max_pages = int(os.environ.get("WEDATA_INSTANCE_MAX_PAGES", "50"))
+        instances_response = _list_all(client, "ListTaskInstances", instance_payload, page_size, max_pages=max_pages)
         instances_path = os.path.join(work_dir, "wedata_task_instances.json")
         with open(instances_path, "w", encoding="utf-8") as f:
             json.dump(instances_response, f, ensure_ascii=False, indent=2)
@@ -57,7 +60,7 @@ def main():
         print(f"synced metadata for {len(dump['tables']['Response']['Data']['Items'])} tables")
 
 
-def _list_all(client, action, payload, page_size):
+def _list_all(client, action, payload, page_size, max_pages=None):
     first = client.call(action, {**payload, "PageNumber": 1, "PageSize": page_size})
     if "Error" in first.get("Response", {}):
         error = first["Response"]["Error"]
@@ -66,7 +69,8 @@ def _list_all(client, action, payload, page_size):
     total_pages = int(data.get("TotalPageNumber") or data.get("PageCount") or 1)
     items = list(data.get("Items") or [])
 
-    for page in range(2, total_pages + 1):
+    stop_page = min(total_pages, max_pages or total_pages)
+    for page in range(2, stop_page + 1):
         response = client.call(action, {**payload, "PageNumber": page, "PageSize": page_size})
         items.extend(response.get("Response", {}).get("Data", {}).get("Items") or [])
 
@@ -74,6 +78,7 @@ def _list_all(client, action, payload, page_size):
     first["Response"]["Data"]["PageNumber"] = 1
     first["Response"]["Data"]["PageSize"] = page_size
     first["Response"]["Data"]["TotalPageNumber"] = total_pages
+    first["Response"]["Data"]["SyncedPageNumber"] = stop_page
     return first
 
 

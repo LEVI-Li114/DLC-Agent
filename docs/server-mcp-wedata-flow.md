@@ -48,6 +48,8 @@ WEDATA_METADATA_TABLE_LIMIT=50
 WEDATA_METADATA_TABLES=
 WEDATA_SYNC_INSTANCES=0
 WEDATA_INSTANCE_LOOKBACK_DAYS=2
+WEDATA_INSTANCE_KEYWORDS=
+WEDATA_INSTANCE_MAX_PAGES=50
 WEDATA_INSTANCE_START=
 WEDATA_INSTANCE_END=
 ```
@@ -127,6 +129,8 @@ sudo vi /etc/dlc-agent/env
 ```bash
 WEDATA_SYNC_INSTANCES=1
 WEDATA_INSTANCE_LOOKBACK_DAYS=2
+WEDATA_INSTANCE_KEYWORDS=ads_bill_company_1d_di,dws_360_fin_job_seat_1d_di
+WEDATA_INSTANCE_MAX_PAGES=50
 WEDATA_INSTANCE_START=2026-07-01 00:00:00
 WEDATA_INSTANCE_END=2026-07-01 23:59:59
 ```
@@ -141,6 +145,8 @@ bash deploy/sync-wedata-once.sh
 This populates task start time, end time, duration, and status for `get_task_runs(task_id)`.
 
 If `WEDATA_INSTANCE_START` and `WEDATA_INSTANCE_END` are empty, the sync uses a rolling window. With `WEDATA_INSTANCE_LOOKBACK_DAYS=2`, every cron run syncs yesterday and today.
+
+Use `WEDATA_INSTANCE_KEYWORDS` to limit instance sync to task names or task ids. Full-project instance sync can be very large, so do not enable it in the 10-minute cron without a keyword filter.
 
 ## 7. Smoke Test MCP On Server
 
