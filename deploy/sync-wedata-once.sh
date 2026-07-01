@@ -17,9 +17,11 @@ set +a
 WORK_DIR="${DLC_AGENT_SYNC_DIR:-/data/dlc-agent/sync}"
 mkdir -p "$WORK_DIR"
 
-python -m dlc_agent.sync_wedata
+PYTHON_BIN="${DLC_AGENT_PYTHON:-python3}"
+
+"$PYTHON_BIN" -m dlc_agent.sync_wedata
 
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
-  | DLC_AGENT_DB="$DLC_AGENT_DB" python -m dlc_agent.server >/dev/null
+  | DLC_AGENT_DB="$DLC_AGENT_DB" "$PYTHON_BIN" -m dlc_agent.server >/dev/null
 
 echo "MCP smoke test passed"

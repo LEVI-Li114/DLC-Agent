@@ -40,7 +40,7 @@ Local Codex config without npm:
 
 ```toml
 [mcp_servers.dlc-agent]
-command = "python"
+command = "python3"
 args = ["-m", "dlc_agent.server"]
 cwd = "/Users/leve/Documents/DLC-Agent"
 type = "stdio"
@@ -54,7 +54,7 @@ Shared Codex config without npm:
 ```toml
 [mcp_servers.dlc-agent]
 command = "ssh"
-args = ["data-agent-host", "cd /opt/dlc-agent && DLC_AGENT_DB=/data/dlc-agent/assets.db python -m dlc_agent.server"]
+args = ["data-agent-host", "cd /opt/dlc-agent && DLC_AGENT_DB=/data/dlc-agent/assets.db python3 -m dlc_agent.server"]
 type = "stdio"
 ```
 
@@ -70,8 +70,8 @@ Ask Codex:
 ## Local Demo
 
 ```bash
-python -m dlc_agent.seed
-DLC_AGENT_DB=data/assets.db python -m dlc_agent.server
+python3 -m dlc_agent.seed
+DLC_AGENT_DB=data/assets.db python3 -m dlc_agent.server
 ```
 
 ## Server Sync Mode
@@ -82,13 +82,13 @@ Run this only on the trusted sync server.
 export TENCENTCLOUD_SECRET_ID=...
 export TENCENTCLOUD_SECRET_KEY=...
 export TENCENTCLOUD_REGION=ap-guangzhou
-python -m dlc_agent.call_wedata_api ListTasks '{"ProjectId":"your-project-id"}'
+python3 -m dlc_agent.call_wedata_api ListTasks '{"ProjectId":"your-project-id"}'
 ```
 
 Import saved Tencent Cloud API responses:
 
 ```bash
-python -m dlc_agent.import_wedata_api_dump \
+python3 -m dlc_agent.import_wedata_api_dump \
   --tables data/wedata_tables.json \
   --tasks data/wedata_tasks.json \
   --quality-rules data/wedata_quality_rules.json \
@@ -98,7 +98,7 @@ python -m dlc_agent.import_wedata_api_dump \
 Import a hand-written WeData snapshot:
 
 ```bash
-python -m dlc_agent.import_wedata_snapshot examples/wedata_snapshot.json --db data/assets.db
+python3 -m dlc_agent.import_wedata_snapshot examples/wedata_snapshot.json --db data/assets.db
 ```
 
 ## Tools

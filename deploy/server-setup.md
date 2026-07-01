@@ -15,7 +15,7 @@ sudo mkdir -p /opt/dlc-agent /data/dlc-agent /etc/dlc-agent
 sudo chown -R "$USER":"$USER" /opt/dlc-agent /data/dlc-agent
 cd /opt/dlc-agent
 git clone <your-repo-url> .
-python -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v
 ```
 
 ## 2. Store Tencent Cloud keys for sync only
@@ -48,7 +48,7 @@ Do not put Tencent Cloud keys in git, npm, user Codex config, or user laptops.
 Demo data:
 
 ```bash
-python -m dlc_agent.seed
+python3 -m dlc_agent.seed
 cp data/assets.db /data/dlc-agent/assets.db
 ```
 
@@ -58,7 +58,7 @@ Live WeData smoke test:
 set -a
 . /etc/dlc-agent/env
 set +a
-python -m dlc_agent.call_wedata_api ListTasks "{\"ProjectId\":\"$WEDATA_PROJECT_ID\"}"
+python3 -m dlc_agent.call_wedata_api ListTasks "{\"ProjectId\":\"$WEDATA_PROJECT_ID\"}"
 ```
 
 One-shot sync for the implemented task dump. This fetches all `ListTasks` pages, writes the raw dump to `/data/dlc-agent/sync/wedata_tasks.json`, imports it into SQLite, and runs a small MCP smoke test:
@@ -78,7 +78,7 @@ bash deploy/sync-wedata-once.sh
 Import saved Tencent Cloud API responses:
 
 ```bash
-python -m dlc_agent.import_wedata_api_dump \
+python3 -m dlc_agent.import_wedata_api_dump \
   --tables /data/dlc-agent/wedata_tables.json \
   --tasks /data/dlc-agent/wedata_tasks.json \
   --quality-rules /data/dlc-agent/wedata_quality_rules.json \
@@ -90,7 +90,7 @@ python -m dlc_agent.import_wedata_api_dump \
 ```bash
 cd /opt/dlc-agent
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
-  | DLC_AGENT_DB=/data/dlc-agent/assets.db python -m dlc_agent.server
+  | DLC_AGENT_DB=/data/dlc-agent/assets.db python3 -m dlc_agent.server
 ```
 
 ## 5. Smoke test MCP over SSH
@@ -99,7 +99,7 @@ Run from a user laptop that has SSH access:
 
 ```bash
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
-  | ssh data-agent-host 'cd /opt/dlc-agent && DLC_AGENT_DB=/data/dlc-agent/assets.db python -m dlc_agent.server'
+  | ssh data-agent-host 'cd /opt/dlc-agent && DLC_AGENT_DB=/data/dlc-agent/assets.db python3 -m dlc_agent.server'
 ```
 
 ## 6. User install

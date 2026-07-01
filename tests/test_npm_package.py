@@ -18,6 +18,7 @@ class NpmPackageTest(unittest.TestCase):
         self.assertIn('"data-agent-host"', script)
         self.assertIn('"/opt/dlc-agent"', script)
         self.assertIn('"/data/dlc-agent/assets.db"', script)
+        self.assertIn('"python3"', script)
 
 
 if __name__ == "__main__":

@@ -13,10 +13,11 @@ if (process.argv[2] === "install-codex") {
 const host = process.env.DLC_AGENT_SSH_HOST || "data-agent-host";
 const remoteDir = process.env.DLC_AGENT_REMOTE_DIR || "/opt/dlc-agent";
 const db = process.env.DLC_AGENT_DB || "/data/dlc-agent/assets.db";
+const python = process.env.DLC_AGENT_PYTHON || "python3";
 
 const child = host
-  ? spawn("ssh", [host, `cd ${remoteDir} && DLC_AGENT_DB=${db} python -m dlc_agent.server`], { stdio: "inherit" })
-  : spawn("python", ["-m", "dlc_agent.server"], {
+  ? spawn("ssh", [host, `cd ${remoteDir} && DLC_AGENT_DB=${db} ${python} -m dlc_agent.server`], { stdio: "inherit" })
+  : spawn(python, ["-m", "dlc_agent.server"], {
       cwd: path.resolve(__dirname, ".."),
       env: process.env,
       stdio: "inherit",
