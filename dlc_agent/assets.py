@@ -56,6 +56,16 @@ class AssetStore:
                 direction text not null,
                 primary key (task_id, table_name, direction)
             );
+            create table if not exists task_runs (
+                task_id text not null,
+                instance_id text not null,
+                instance_date text not null default '',
+                start_time text not null default '',
+                end_time text not null default '',
+                duration_seconds integer not null default 0,
+                status text not null default '',
+                primary key (task_id, instance_id)
+            );
             """
         )
         self.conn.commit()
@@ -158,6 +168,30 @@ class AssetStore:
             self.conn.execute("insert into task_tables (task_id, table_name, direction) values (?, ?, 'output')", (item["id"], table_name))
         self.conn.commit()
 
+    def upsert_task_run(self, item):
+        self.conn.execute(
+            """
+            insert into task_runs (task_id, instance_id, instance_date, start_time, end_time, duration_seconds, status)
+            values (?, ?, ?, ?, ?, ?, ?)
+            on conflict(task_id, instance_id) do update set
+                instance_date = excluded.instance_date,
+                start_time = excluded.start_time,
+                end_time = excluded.end_time,
+                duration_seconds = excluded.duration_seconds,
+                status = excluded.status
+            """,
+            (
+                item["task_id"],
+                item["instance_id"],
+                item.get("instance_date", ""),
+                item.get("start_time", ""),
+                item.get("end_time", ""),
+                int(item.get("duration_seconds") or 0),
+                item.get("status", ""),
+            ),
+        )
+        self.conn.commit()
+
     def get_task(self, task_id):
         task = self._one("select * from tasks where id = ?", (task_id,))
         if not task:
@@ -166,6 +200,19 @@ class AssetStore:
         data["inputs"] = [row["table_name"] for row in self._all("select table_name from task_tables where task_id = ? and direction = 'input' order by table_name", (task_id,))]
         data["outputs"] = [row["table_name"] for row in self._all("select table_name from task_tables where task_id = ? and direction = 'output' order by table_name", (task_id,))]
         return data
+
+    def get_task_runs(self, task_id, limit=10):
+        rows = self._all(
+            """
+            select task_id, instance_id, instance_date, start_time, end_time, duration_seconds, status
+            from task_runs
+            where task_id = ?
+            order by instance_date desc, start_time desc
+            limit ?
+            """,
+            (task_id, limit),
+        )
+        return {"task_id": task_id, "runs": [dict(row) for row in rows]}
 
     def get_table_tasks(self, table_name):
         rows = self._all(

@@ -68,6 +68,18 @@ cd /opt/dlc-agent
 bash deploy/sync-wedata-once.sh
 ```
 
+To sync task instance start/end/duration after `ListTaskInstances` works in your tenant, set:
+
+```bash
+sudo vi /etc/dlc-agent/env
+```
+
+```bash
+WEDATA_SYNC_INSTANCES=1
+WEDATA_INSTANCE_START=2026-07-01 00:00:00
+WEDATA_INSTANCE_END=2026-07-01 23:59:59
+```
+
 If your repo lives under `/opt/dlc-agent/DLC-Agent`, run:
 
 ```bash

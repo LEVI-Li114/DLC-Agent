@@ -9,6 +9,7 @@
   "files": [
     "bin",
     "dlc_agent/*.py",
+    "docs/*.md",
     "README.md"
   ],
   "scripts": {

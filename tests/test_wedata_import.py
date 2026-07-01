@@ -50,6 +50,17 @@ class WeDataImportTest(unittest.TestCase):
                         "last_checked_at": "2026-07-01T09:00:00",
                     }
                 ],
+                "task_instances": [
+                    {
+                        "task_id": "task_001",
+                        "instance_id": "inst_001",
+                        "instance_date": "2026-07-01",
+                        "start_time": "2026-07-01 08:00:00",
+                        "end_time": "2026-07-01 08:05:30",
+                        "duration_seconds": 330,
+                        "status": "success",
+                    }
+                ],
             },
         )
 
@@ -59,6 +70,7 @@ class WeDataImportTest(unittest.TestCase):
         self.assertEqual(profile["quality"]["rule_count"], 1)
         self.assertEqual(store.get_table_lineage("dws_customer_order_daily")["upstream"][0]["upstream"], "ods_order")
         self.assertEqual(store.get_task("task_001")["outputs"], ["dws_customer_order_daily"])
+        self.assertEqual(store.get_task_runs("task_001")["runs"][0]["duration_seconds"], 330)
 
     def test_builds_snapshot_from_api_dump(self):
         snapshot = snapshot_from_api_dump(
@@ -149,6 +161,31 @@ class WeDataImportTest(unittest.TestCase):
                 "outputs": [],
             },
         )
+
+    def test_maps_task_instance_time_fields(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "task_instances": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "TaskId": "task_001",
+                                    "InstanceId": "inst_001",
+                                    "InstanceDate": "2026-07-01",
+                                    "StartTime": "2026-07-01 08:00:00",
+                                    "EndTime": "2026-07-01 08:03:00",
+                                    "CostTime": 180,
+                                    "Status": "success",
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(snapshot["task_instances"][0]["duration_seconds"], 180)
 
 
 if __name__ == "__main__":

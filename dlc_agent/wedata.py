@@ -29,11 +29,15 @@ def import_wedata_snapshot(store, snapshot):
     for rule in snapshot.get("quality_rules", []):
         store.upsert_quality_rule(rule)
 
+    for run in snapshot.get("task_instances", []):
+        store.upsert_task_run(run)
+
 
 def snapshot_from_api_dump(dump):
     return {
         "tables": [_table_from_api(item) for item in _items(dump.get("tables", {}))],
         "tasks": [_task_from_api(item) for item in _items(dump.get("tasks", {}))],
+        "task_instances": [_task_instance_from_api(item) for item in _items(dump.get("task_instances", {}))],
         "lineage": [_lineage_from_api(item) for item in _items(dump.get("lineage", {}))],
         "quality_rules": [_quality_rule_from_api(item) for item in _items(dump.get("quality_rules", {}))],
     }
@@ -119,4 +123,16 @@ def _quality_rule_from_api(item):
         "enabled": bool(_get(item, "Enabled", "IsEnabled", "enabled", default=True)),
         "last_status": _get(item, "LastStatus", "Status", "lastStatus"),
         "last_checked_at": _get(item, "LastCheckedAt", "CheckTime", "lastCheckedAt"),
+    }
+
+
+def _task_instance_from_api(item):
+    return {
+        "task_id": str(_get(item, "TaskId", "TaskID", "taskId")),
+        "instance_id": str(_get(item, "InstanceId", "InstanceID", "Id", "id")),
+        "instance_date": _get(item, "InstanceDate", "CurRunDate", "ScheduleTime", "instanceDate"),
+        "start_time": _get(item, "StartTime", "StartDate", "startTime"),
+        "end_time": _get(item, "EndTime", "EndDate", "endTime"),
+        "duration_seconds": int(_get(item, "CostTime", "CostSeconds", "DurationSeconds", "duration_seconds", default=0) or 0),
+        "status": _get(item, "Status", "State", "ExecutionStatus", "status"),
     }

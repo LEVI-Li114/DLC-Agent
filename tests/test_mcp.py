@@ -32,6 +32,17 @@ class McpTest(unittest.TestCase):
                 "outputs": ["dim_customer"],
             }
         )
+        self.store.upsert_task_run(
+            {
+                "task_id": "task_001",
+                "instance_id": "inst_001",
+                "instance_date": "2026-07-01",
+                "start_time": "2026-07-01 08:00:00",
+                "end_time": "2026-07-01 08:05:00",
+                "duration_seconds": 300,
+                "status": "success",
+            }
+        )
 
     def test_lists_tools(self):
         response = handle_request(self.store, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -66,6 +77,19 @@ class McpTest(unittest.TestCase):
         )
 
         self.assertIn("build_dim_customer", response["result"]["content"][0]["text"])
+
+    def test_calls_get_task_runs_tool(self):
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {"name": "get_task_runs", "arguments": {"task_id": "task_001"}},
+            },
+        )
+
+        self.assertIn("duration_seconds", response["result"]["content"][0]["text"])
 
 
 if __name__ == "__main__":

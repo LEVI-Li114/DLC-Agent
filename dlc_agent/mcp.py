@@ -30,6 +30,10 @@ TOOLS = {
         "description": "Return ETL tasks that read from or produce a table.",
         "schema": {"type": "object", "properties": {"table_name": {"type": "string"}}, "required": ["table_name"]},
     },
+    "get_task_runs": {
+        "description": "Return recent task instances with start time, end time, duration, and status.",
+        "schema": {"type": "object", "properties": {"task_id": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["task_id"]},
+    },
     "is_core_table": {
         "description": "Decide whether a table is core and return explainable scoring reasons.",
         "schema": {"type": "object", "properties": {"table_name": {"type": "string"}}, "required": ["table_name"]},
@@ -79,6 +83,8 @@ def _call_tool(store, request):
         data = store.get_table_lineage(args["table_name"])
     elif name == "get_table_tasks":
         data = store.get_table_tasks(args["table_name"])
+    elif name == "get_task_runs":
+        data = store.get_task_runs(args["task_id"], args.get("limit", 10))
     else:
         data = store.is_core_table(args["table_name"])
 
