@@ -101,16 +101,23 @@ Import a hand-written WeData snapshot:
 python3 -m dlc_agent.import_wedata_snapshot examples/wedata_snapshot.json --db data/assets.db
 ```
 
-## Tools
+## MCP Tools
 
-- `search_assets(query)`
-- `search_tasks(query)`
-- `get_table_profile(table_name)`
-- `list_table_columns(table_name)`
-- `get_quality_status(table_name)`
-- `get_table_lineage(table_name)`
-- `get_table_tasks(table_name)`
-- `is_core_table(table_name)`
+Update this section whenever a new MCP tool is added.
+
+| Tool | What it answers | Current data source |
+| --- | --- | --- |
+| `search_assets(query)` | Search table assets by name, domain, or description. | Imported table metadata |
+| `search_tasks(query)` | Search WeData ETL tasks by task id, task name, owner, or status. | `ListTasks` sync |
+| `get_table_profile(table_name)` | Return one table's metadata, columns, lineage, quality summary, related tasks, and core-table decision. | Imported table/column/lineage/quality/task data |
+| `list_table_columns(table_name)` | List fields for a table. | Imported table column metadata |
+| `get_quality_status(table_name)` | Show whether a table has quality monitoring, rule count, latest status, and rule details. | Imported WeData quality rules |
+| `get_table_lineage(table_name)` | Return upstream and downstream assets for a table. | Imported lineage and task input/output data |
+| `get_table_tasks(table_name)` | Return ETL tasks that read from or produce a table. | Task input/output mapping |
+| `get_task_runs(task_id)` | Return recent task instances, including start time, end time, duration, and status. | Optional `ListTaskInstances` sync |
+| `is_core_table(table_name)` | Explain whether a table is core and return score plus reasons. | Local scoring model over layer/domain/lineage/quality/manual marks |
+
+Current limitation: after the first real sync, task search is available. Table columns, lineage, and quality answers become accurate after their corresponding WeData APIs are imported.
 
 ## WeData Snapshot Shape
 
