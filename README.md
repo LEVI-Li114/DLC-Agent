@@ -179,7 +179,7 @@ Sync rolling task runs for yesterday and today:
 WEDATA_SYNC_INSTANCES=1 WEDATA_INSTANCE_LOOKBACK_DAYS=2 WEDATA_INSTANCE_KEYWORDS=ads_bill_company_1d_di bash deploy/sync-wedata-once.sh
 ```
 
-Install a server crontab to sync every 10 minutes:
+Install a server crontab to sync every 6 hours:
 
 ```bash
 cd /opt/dlc-agent/DLC-Agent

@@ -20,7 +20,7 @@ fi
 mkdir -p "$LOG_DIR"
 
 CRON_CMD="cd $REPO_DIR && bash deploy/sync-wedata-once.sh $ENV_FILE >> $LOG_DIR/sync.log 2>&1"
-CRON_LINE="*/10 * * * * $CRON_CMD $CRON_TAG"
+CRON_LINE="0 */6 * * * $CRON_CMD $CRON_TAG"
 
 (
   crontab -l 2>/dev/null | grep -v "$CRON_TAG" || true
