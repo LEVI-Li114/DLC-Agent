@@ -25,7 +25,7 @@ class TencentCloudClient:
             secret_id=os.environ["TENCENTCLOUD_SECRET_ID"],
             secret_key=os.environ["TENCENTCLOUD_SECRET_KEY"],
             service="wedata",
-            version=os.environ.get("WEDATA_VERSION", "2021-08-20"),
+            version=os.environ.get("WEDATA_VERSION", "2025-08-06"),
             region=os.environ.get("TENCENTCLOUD_REGION", "ap-guangzhou"),
             endpoint=os.environ.get("WEDATA_ENDPOINT"),
         )

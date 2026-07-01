@@ -34,7 +34,7 @@ class TencentCloudClientTest(unittest.TestCase):
             secret_id="sid",
             secret_key="skey",
             service="wedata",
-            version="2021-08-20",
+            version="2025-08-06",
             region="ap-guangzhou",
             opener=opener,
         )
@@ -44,7 +44,7 @@ class TencentCloudClientTest(unittest.TestCase):
         self.assertEqual(response["Response"]["RequestId"], "rid-1")
         self.assertEqual(opener.request.full_url, "https://wedata.tencentcloudapi.com")
         self.assertEqual(opener.request.headers["X-tc-action"], "ListTasks")
-        self.assertEqual(opener.request.headers["X-tc-version"], "2021-08-20")
+        self.assertEqual(opener.request.headers["X-tc-version"], "2025-08-06")
         self.assertEqual(opener.request.headers["X-tc-region"], "ap-guangzhou")
         self.assertIn("TC3-HMAC-SHA256", opener.request.headers["Authorization"])
         self.assertEqual(json.loads(opener.request.data.decode("utf-8")), {"ProjectId": "p1"})

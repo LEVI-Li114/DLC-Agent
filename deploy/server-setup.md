@@ -36,6 +36,7 @@ Fill these values:
 TENCENTCLOUD_SECRET_ID=your-secret-id
 TENCENTCLOUD_SECRET_KEY=your-secret-key
 TENCENTCLOUD_REGION=ap-guangzhou
+WEDATA_VERSION=2025-08-06
 WEDATA_PROJECT_ID=your-wedata-project-id
 DLC_AGENT_DB=/data/dlc-agent/assets.db
 ```
