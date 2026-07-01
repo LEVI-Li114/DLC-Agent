@@ -23,6 +23,13 @@ def main():
         json.dump(tasks_response, f, ensure_ascii=False, indent=2)
 
     dump = {"tasks": tasks_response}
+    task_snapshot = snapshot_from_api_dump(dump)
+    table_names = sorted({table for task in task_snapshot["tasks"] for table in task.get("outputs", [])})
+
+    if os.environ.get("WEDATA_SYNC_METADATA") == "1":
+        metadata_dump = _sync_metadata(client, project_id, table_names, page_size, work_dir)
+        dump.update(metadata_dump)
+
     if os.environ.get("WEDATA_SYNC_INSTANCES") == "1":
         instance_payload = {"ProjectId": project_id}
         for env_name, field_name in (("WEDATA_INSTANCE_START", "StartTime"), ("WEDATA_INSTANCE_END", "EndTime")):
@@ -44,12 +51,14 @@ def main():
     if "task_instances" in dump:
         run_total = len(dump["task_instances"]["Response"]["Data"]["Items"])
         print(f"synced {run_total} WeData task instances")
+    if "tables" in dump:
+        print(f"synced metadata for {len(dump['tables']['Response']['Data']['Items'])} tables")
 
 
 def _list_all(client, action, payload, page_size):
     first = client.call(action, {**payload, "PageNumber": 1, "PageSize": page_size})
     data = first.get("Response", {}).get("Data", {})
-    total_pages = int(data.get("TotalPageNumber") or 1)
+    total_pages = int(data.get("TotalPageNumber") or data.get("PageCount") or 1)
     items = list(data.get("Items") or [])
 
     for page in range(2, total_pages + 1):
@@ -61,6 +70,58 @@ def _list_all(client, action, payload, page_size):
     first["Response"]["Data"]["PageSize"] = page_size
     first["Response"]["Data"]["TotalPageNumber"] = total_pages
     return first
+
+
+def _sync_metadata(client, project_id, table_names, page_size, work_dir):
+    if os.environ.get("WEDATA_METADATA_TABLES"):
+        table_names = [name.strip() for name in os.environ["WEDATA_METADATA_TABLES"].split(",") if name.strip()]
+    limit = int(os.environ.get("WEDATA_METADATA_TABLE_LIMIT", "50"))
+    table_names = table_names[:limit]
+    tables = []
+    columns = {}
+    lineage = []
+    quality_rules = []
+
+    for table_name in table_names:
+        table_response = client.call("ListTable", {"PageNumber": 1, "PageSize": 20, "Keyword": table_name})
+        matches = [item for item in table_response.get("Response", {}).get("Data", {}).get("Items", []) if item.get("Name") == table_name]
+        if not matches:
+            continue
+        table = matches[0]
+        guid = table.get("Guid")
+        if guid:
+            column_response = client.call("GetTableColumns", {"TableGuid": guid})
+            table["Columns"] = column_response.get("Response", {}).get("Data") or []
+            columns[table_name] = column_response
+            for direction in ("OUTPUT",):
+                lineage_response = _list_all(
+                    client,
+                    "ListLineage",
+                    {"ResourceUniqueId": guid, "ResourceType": "TABLE", "Direction": direction, "Platform": "WEDATA"},
+                    page_size,
+                )
+                for item in lineage_response.get("Response", {}).get("Data", {}).get("Items", []) or []:
+                    item["QueriedTableName"] = table_name
+                    lineage.append(item)
+        quality_response = _list_all(
+            client,
+            "ListQualityRules",
+            {"ProjectId": project_id, "Filters": [{"Name": "TableName", "Values": [table_name]}]},
+            page_size,
+        )
+        quality_rules.extend(quality_response.get("Response", {}).get("Data", {}).get("Items", []) or [])
+        tables.append(table)
+
+    payload = {
+        "tables": {"Response": {"Data": {"Items": tables}}},
+        "lineage": {"Response": {"Data": {"Items": lineage}}},
+        "quality_rules": {"Response": {"Data": {"Items": quality_rules}}},
+    }
+    path = os.path.join(work_dir, "wedata_metadata.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"payload": payload, "columns": columns}, f, ensure_ascii=False, indent=2)
+    print(f"saved raw metadata dump to {path}")
+    return payload
 
 
 if __name__ == "__main__":

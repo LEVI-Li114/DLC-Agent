@@ -138,6 +138,67 @@ class WeDataImportTest(unittest.TestCase):
         self.assertEqual(snapshot["tasks"][0]["id"], "t1")
         self.assertEqual(snapshot["quality_rules"][0]["rule_name"], "amount_not_null")
 
+    def test_maps_real_metadata_columns_quality_and_lineage(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "tables": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "Guid": "guid_1",
+                                    "Name": "ads_bill_company_1d_di",
+                                    "DatabaseName": "byai_bigdata",
+                                    "Description": "客户账单应用表",
+                                    "TechnicalMetadata": {"Owner": "prod-bigdata"},
+                                    "Columns": [
+                                        {"Name": "company_id", "Type": "bigint", "Description": "客户id", "Position": 4}
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                },
+                "lineage": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "QueriedTableName": "ads_bill_company_1d_di",
+                                    "Resource": {
+                                        "ResourceName": "cc_prod.ads_bill_company_1d_di_report",
+                                        "ResourceProperties": [{"Name": "TableName", "Value": "ads_bill_company_1d_di_report"}],
+                                    },
+                                    "Relation": {"Processes": [{"ProcessId": "task_down"}]},
+                                }
+                            ]
+                        }
+                    }
+                },
+                "quality_rules": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "TableName": "ads_bill_company_1d_di",
+                                    "Name": "bill_amt_not_null",
+                                    "RuleTemplateContent": "完整性: 非空",
+                                    "SourceObjectValue": "bill_amt",
+                                    "MonitorStatus": 1,
+                                    "UpdateTime": "2026-07-01 10:00:00",
+                                }
+                            ]
+                        }
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(snapshot["tables"][0]["guid"], "guid_1")
+        self.assertEqual(snapshot["tables"][0]["columns"][0]["name"], "company_id")
+        self.assertEqual(snapshot["lineage"][0]["downstream"], "ads_bill_company_1d_di_report")
+        self.assertEqual(snapshot["quality_rules"][0]["target"], "bill_amt")
+
     def test_maps_data_sources_from_api_dump(self):
         snapshot = snapshot_from_api_dump(
             {

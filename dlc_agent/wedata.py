@@ -52,7 +52,7 @@ def snapshot_from_api_dump(dump):
         "tasks": tasks,
         "task_instances": [_task_instance_from_api(item) for item in _items(dump.get("task_instances", {}))],
         "data_sources": [_data_source_from_api(item) for item in _items(dump.get("data_sources", {}))],
-        "lineage": [_lineage_from_api(item) for item in _items(dump.get("lineage", {}))],
+        "lineage": [edge for edge in (_lineage_from_api(item) for item in _items(dump.get("lineage", {}))) if edge["upstream"] and edge["downstream"] and edge["upstream"] != edge["downstream"]],
         "quality_rules": [_quality_rule_from_api(item) for item in _items(dump.get("quality_rules", {}))],
     }
 
@@ -87,12 +87,15 @@ def _get(item, *names, default=""):
 
 
 def _table_from_api(item):
+    name = _get(item, "TableName", "Name", "tableName", "name")
+    metadata = item.get("TechnicalMetadata") or {}
     return {
-        "name": _get(item, "TableName", "Name", "tableName", "name"),
+        "name": name,
+        "guid": _get(item, "Guid", "TableGuid", "TableId", "id"),
         "database": _get(item, "DatabaseName", "Database", "DbName", "database"),
-        "layer": _get(item, "Layer", "TableLayer", "layer"),
-        "domain": _get(item, "Domain", "BizDomain", "domain"),
-        "owner": _get(item, "Owner", "OwnerName", "ResponsibleUser", "owner"),
+        "layer": _get(item, "Layer", "TableLayer", "layer", default=_layer_from_name(name)),
+        "domain": _get(item, "Domain", "BizDomain", "domain", default=_domain_from_tokens(name.lower().split("_"))),
+        "owner": _get(item, "Owner", "OwnerName", "ResponsibleUser", "owner", default=metadata.get("Owner") or ""),
         "description": _get(item, "Description", "Comment", "description"),
         "columns": [_column_from_api(column) for column in _get(item, "Columns", "ColumnList", "columns", default=[])],
     }
@@ -157,22 +160,23 @@ def _domain_from_tokens(tokens):
 
 
 def _lineage_from_api(item):
+    resource = item.get("Resource") or {}
     return {
-        "upstream": _get(item, "Upstream", "Source", "SourceTable", "upstream"),
-        "downstream": _get(item, "Downstream", "Target", "TargetTable", "downstream"),
-        "via": _get(item, "Via", "TaskName", "TaskId", "via"),
+        "upstream": _get(item, "QueriedTableName", "Upstream", "Source", "SourceTable", "upstream"),
+        "downstream": _resource_table_name(resource) or _get(item, "Downstream", "Target", "TargetTable", "downstream"),
+        "via": _process_ids(item.get("Relation") or {}) or _get(item, "Via", "TaskName", "TaskId", "via"),
     }
 
 
 def _quality_rule_from_api(item):
     return {
         "table_name": _get(item, "TableName", "tableName"),
-        "rule_name": _get(item, "RuleName", "Name", "ruleName"),
-        "rule_type": _get(item, "RuleType", "Type", "ruleType"),
-        "target": _get(item, "Target", "ColumnName", "FieldName", "target"),
-        "enabled": bool(_get(item, "Enabled", "IsEnabled", "enabled", default=True)),
-        "last_status": _get(item, "LastStatus", "Status", "lastStatus"),
-        "last_checked_at": _get(item, "LastCheckedAt", "CheckTime", "lastCheckedAt"),
+        "rule_name": _get(item, "RuleName", "Name", "ruleName", default=str(_get(item, "RuleId", default=""))),
+        "rule_type": str(_get(item, "RuleType", "RuleTemplateContent", "Type", "ruleType")),
+        "target": _get(item, "Target", "ColumnName", "FieldName", "SourceObjectValue", "target"),
+        "enabled": _get(item, "MonitorStatus", "Enabled", "IsEnabled", "enabled", default=True) not in (False, 0, "0", "false"),
+        "last_status": _get(item, "LastStatus", "Status", "DeployStatus", "lastStatus", default="configured"),
+        "last_checked_at": _get(item, "LastCheckedAt", "CheckTime", "UpdateTime", "lastCheckedAt"),
     }
 
 
@@ -202,3 +206,18 @@ def _data_source_from_api(item):
         "description": _get(item, "Description", "Remark", "Comment", "description"),
         "config": config,
     }
+
+
+def _layer_from_name(name):
+    prefix = (name or "").split("_", 1)[0].lower()
+    return prefix if prefix in {"ods", "dim", "dwd", "dws", "ads"} else ""
+
+
+def _resource_table_name(resource):
+    props = {item.get("Name"): item.get("Value") for item in resource.get("ResourceProperties") or []}
+    return props.get("TableName") or (resource.get("ResourceName") or "").split(".")[-1]
+
+
+def _process_ids(relation):
+    ids = [str(process.get("ProcessId")) for process in relation.get("Processes") or [] if process.get("ProcessId")]
+    return ",".join(ids)

@@ -12,6 +12,7 @@ class AssetStore:
             """
             create table if not exists tables (
                 name text primary key,
+                source_guid text not null default '',
                 database_name text not null default '',
                 layer text not null default '',
                 domain text not null default '',
@@ -77,23 +78,26 @@ class AssetStore:
             );
             """
         )
+        self._add_column_if_missing("tables", "source_guid", "text not null default ''")
         self.conn.commit()
 
     def upsert_table(self, item):
         self.conn.execute(
             """
-            insert into tables (name, database_name, layer, domain, owner, description, manual_core_level)
-            values (?, ?, ?, ?, ?, ?, ?)
+            insert into tables (name, source_guid, database_name, layer, domain, owner, description, manual_core_level)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(name) do update set
-                database_name = excluded.database_name,
-                layer = excluded.layer,
-                domain = excluded.domain,
-                owner = excluded.owner,
-                description = excluded.description,
-                manual_core_level = excluded.manual_core_level
+                source_guid = coalesce(nullif(excluded.source_guid, ''), tables.source_guid),
+                database_name = coalesce(nullif(excluded.database_name, ''), tables.database_name),
+                layer = coalesce(nullif(excluded.layer, ''), tables.layer),
+                domain = coalesce(nullif(excluded.domain, ''), tables.domain),
+                owner = coalesce(nullif(excluded.owner, ''), tables.owner),
+                description = coalesce(nullif(excluded.description, ''), tables.description),
+                manual_core_level = coalesce(excluded.manual_core_level, tables.manual_core_level)
             """,
             (
                 item["name"],
+                item.get("guid", ""),
                 item.get("database", ""),
                 item.get("layer", ""),
                 item.get("domain", ""),
@@ -222,7 +226,7 @@ class AssetStore:
 
     def list_metadata(self):
         databases = [row["database_name"] for row in self._all("select distinct database_name from tables where database_name != '' order by database_name")]
-        tables = [self._table_dict(row) for row in self._all("select name, database_name, layer, domain, owner, description, manual_core_level from tables order by database_name, name limit 100")]
+        tables = [self._table_dict(row) for row in self._all("select name, source_guid, database_name, layer, domain, owner, description, manual_core_level from tables order by database_name, name limit 100")]
         return {"databases": databases, "tables": tables}
 
     def upsert_task_run(self, item):
@@ -343,7 +347,7 @@ class AssetStore:
         like = f"%{query}%"
         rows = self._all(
             """
-            select name, database_name, layer, domain, owner, description
+            select name, source_guid, database_name, layer, domain, owner, description
             from tables
             where name like ? or description like ? or domain like ?
             order by name
@@ -383,6 +387,11 @@ class AssetStore:
 
     def _all(self, sql, args=()):
         return self.conn.execute(sql, args).fetchall()
+
+    def _add_column_if_missing(self, table_name, column_name, definition):
+        columns = {row["name"] for row in self.conn.execute(f"pragma table_info({table_name})")}
+        if column_name not in columns:
+            self.conn.execute(f"alter table {table_name} add column {column_name} {definition}")
 
     def _table_dict(self, row):
         data = dict(row)

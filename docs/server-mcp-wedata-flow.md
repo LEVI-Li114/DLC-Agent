@@ -43,6 +43,9 @@ TENCENTCLOUD_REGION=ap-guangzhou
 WEDATA_VERSION=2025-08-06
 WEDATA_PROJECT_ID=2881307738992685056
 DLC_AGENT_DB=/data/dlc-agent/assets.db
+WEDATA_SYNC_METADATA=0
+WEDATA_METADATA_TABLE_LIMIT=50
+WEDATA_METADATA_TABLES=
 WEDATA_SYNC_INSTANCES=0
 WEDATA_INSTANCE_START=
 WEDATA_INSTANCE_END=
@@ -75,6 +78,7 @@ The script:
 
 - loads `/etc/dlc-agent/env`
 - calls `ListTasks` with pagination
+- optionally calls `ListTable`, `GetTableColumns`, `ListLineage`, and `ListQualityRules`
 - saves the raw task dump to `/data/dlc-agent/sync/wedata_tasks.json`
 - imports tasks into `/data/dlc-agent/assets.db`
 - runs a small MCP smoke test
@@ -87,7 +91,31 @@ saved raw task dump to /data/dlc-agent/sync/wedata_tasks.json
 MCP smoke test passed
 ```
 
-## 5. Optional: Sync Task Runs
+## 5. Optional: Sync Real Table Metadata
+
+Enable this when you want real fields, downstream lineage, and quality rules:
+
+```bash
+cd /opt/dlc-agent/DLC-Agent
+WEDATA_SYNC_METADATA=1 WEDATA_METADATA_TABLE_LIMIT=50 bash deploy/sync-wedata-once.sh
+```
+
+For a small targeted run:
+
+```bash
+WEDATA_SYNC_METADATA=1 WEDATA_METADATA_TABLES=ads_bill_company_1d_di,dws_360_fin_job_seat_1d_di bash deploy/sync-wedata-once.sh
+```
+
+This uses:
+
+- `ListTable` to resolve table GUID, database, owner, description
+- `GetTableColumns` to sync real fields
+- `ListLineage` to sync downstream lineage
+- `ListQualityRules` to sync quality monitoring rules
+
+The metadata table limit keeps the sync small enough for manual runs. Increase it after the first run is stable.
+
+## 6. Optional: Sync Task Runs
 
 After `ListTaskInstances` works for your tenant, enable run-instance sync:
 
@@ -110,7 +138,7 @@ bash deploy/sync-wedata-once.sh
 
 This populates task start time, end time, duration, and status for `get_task_runs(task_id)`.
 
-## 6. Smoke Test MCP On Server
+## 7. Smoke Test MCP On Server
 
 List tools:
 
@@ -135,7 +163,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"g
   | DLC_AGENT_DB=/data/dlc-agent/assets.db python3 -m dlc_agent.server
 ```
 
-## 7. Smoke Test MCP From A User Laptop
+## 8. Smoke Test MCP From A User Laptop
 
 The user laptop must be able to SSH to the server.
 
@@ -146,7 +174,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
 
 If this returns MCP tools, Codex can use the server.
 
-## 8. Connect Codex
+## 9. Connect Codex
 
 Before the npm package is published, add this to `~/.codex/config.toml`:
 
@@ -169,16 +197,19 @@ Restart Codex, then ask:
 用 dlc-agent 搜索任务 dws_360_fin_job_seat_1d_di
 ```
 
-## 9. Current Supported Real Data
+## 10. Current Supported Real Data
 
 - Real WeData task list: supported through `ListTasks`
 - Task search: supported through `search_tasks(query)`
 - Task run start/end/duration/status: supported after optional `ListTaskInstances` sync
+- Table metadata and fields: supported through optional `ListTable` and `GetTableColumns` sync
+- Downstream lineage: supported through optional `ListLineage` sync
+- Quality rules: supported through optional `ListQualityRules` sync
 - Data source listing and configuration lookup: local model and JSON import supported; live sync still needs follow-up work
-- Metadata database/table listing: local model and JSON import supported; live metadata sync still needs follow-up work
-- Table fields, quality rules, lineage: local model exists, real WeData sync still needs follow-up work
+- Metadata database/table listing: supported after optional metadata sync
+- Usage heat: not supported yet; needs query logs or BI/report access logs
 
-## 10. Routine Refresh
+## 11. Routine Refresh
 
 Run whenever you want to refresh data:
 
