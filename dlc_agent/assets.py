@@ -180,6 +180,20 @@ class AssetStore:
         )
         return {"table_name": table_name, "tasks": [dict(row) for row in rows]}
 
+    def search_tasks(self, query):
+        like = f"%{query}%"
+        rows = self._all(
+            """
+            select id, name, task_type, cycle, owner, status
+            from tasks
+            where id like ? or name like ? or owner like ? or status like ?
+            order by name
+            limit 20
+            """,
+            (like, like, like, like),
+        )
+        return {"query": query, "results": [self.get_task(row["id"]) for row in rows]}
+
     def get_table_profile(self, table_name):
         table = self._one("select * from tables where name = ?", (table_name,))
         if not table:

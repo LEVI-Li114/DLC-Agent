@@ -115,3 +115,10 @@ Restart Codex, then ask:
 ```text
 用 dlc-agent 查一下 ads_customer_revenue_daily 是不是核心表，有哪些字段，有没有质量监控
 ```
+
+After task sync, test task search:
+
+```bash
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_tasks","arguments":{"query":"test"}}}' \
+  | DLC_AGENT_DB=/data/dlc-agent/assets.db python3 -m dlc_agent.server
+```

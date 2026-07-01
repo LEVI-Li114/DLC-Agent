@@ -6,6 +6,10 @@ TOOLS = {
         "description": "Search tables by name, domain, or description.",
         "schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
     },
+    "search_tasks": {
+        "description": "Search WeData ETL tasks by id, name, owner, or status.",
+        "schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    },
     "get_table_profile": {
         "description": "Return table metadata, columns, lineage, quality status, and core-table decision.",
         "schema": {"type": "object", "properties": {"table_name": {"type": "string"}}, "required": ["table_name"]},
@@ -63,6 +67,8 @@ def _call_tool(store, request):
 
     if name == "search_assets":
         data = store.search_assets(args["query"])
+    elif name == "search_tasks":
+        data = store.search_tasks(args["query"])
     elif name == "get_table_profile":
         data = store.get_table_profile(args["table_name"])
     elif name == "list_table_columns":

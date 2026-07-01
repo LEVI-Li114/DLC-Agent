@@ -21,12 +21,24 @@ class McpTest(unittest.TestCase):
             }
         )
         self.store.upsert_column("dim_customer", "customer_id", "string", "Customer ID", 1)
+        self.store.upsert_task(
+            {
+                "id": "task_001",
+                "name": "build_dim_customer",
+                "task_type": "32",
+                "cycle": "DAY",
+                "owner": "100043939904",
+                "status": "Y11",
+                "outputs": ["dim_customer"],
+            }
+        )
 
     def test_lists_tools(self):
         response = handle_request(self.store, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
 
         self.assertEqual(response["id"], 1)
         self.assertIn("get_table_profile", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("search_tasks", [tool["name"] for tool in response["result"]["tools"]])
 
     def test_calls_table_profile_tool(self):
         response = handle_request(
@@ -41,6 +53,19 @@ class McpTest(unittest.TestCase):
 
         self.assertEqual(response["result"]["content"][0]["type"], "text")
         self.assertIn("dim_customer", response["result"]["content"][0]["text"])
+
+    def test_calls_search_tasks_tool(self):
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "search_tasks", "arguments": {"query": "customer"}},
+            },
+        )
+
+        self.assertIn("build_dim_customer", response["result"]["content"][0]["text"])
 
 
 if __name__ == "__main__":

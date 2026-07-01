@@ -104,6 +104,7 @@ python3 -m dlc_agent.import_wedata_snapshot examples/wedata_snapshot.json --db d
 ## Tools
 
 - `search_assets(query)`
+- `search_tasks(query)`
 - `get_table_profile(table_name)`
 - `list_table_columns(table_name)`
 - `get_quality_status(table_name)`
