@@ -1,0 +1,47 @@
+import sqlite3
+import unittest
+
+from dlc_agent.assets import AssetStore
+from dlc_agent.mcp import handle_request
+
+
+class McpTest(unittest.TestCase):
+    def setUp(self):
+        conn = sqlite3.connect(":memory:")
+        self.store = AssetStore(conn)
+        self.store.init_schema()
+        self.store.upsert_table(
+            {
+                "name": "dim_customer",
+                "database": "dw",
+                "layer": "dim",
+                "domain": "customer",
+                "owner": "data-customer",
+                "description": "Customer dimension",
+            }
+        )
+        self.store.upsert_column("dim_customer", "customer_id", "string", "Customer ID", 1)
+
+    def test_lists_tools(self):
+        response = handle_request(self.store, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+
+        self.assertEqual(response["id"], 1)
+        self.assertIn("get_table_profile", [tool["name"] for tool in response["result"]["tools"]])
+
+    def test_calls_table_profile_tool(self):
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "get_table_profile", "arguments": {"table_name": "dim_customer"}},
+            },
+        )
+
+        self.assertEqual(response["result"]["content"][0]["type"], "text")
+        self.assertIn("dim_customer", response["result"]["content"][0]["text"])
+
+
+if __name__ == "__main__":
+    unittest.main()

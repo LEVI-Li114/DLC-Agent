@@ -1,0 +1,278 @@
+import sqlite3
+
+
+class AssetStore:
+    def __init__(self, conn):
+        self.conn = conn
+        self.conn.row_factory = sqlite3.Row
+
+    def init_schema(self):
+        self.conn.executescript(
+            """
+            create table if not exists tables (
+                name text primary key,
+                database_name text not null default '',
+                layer text not null default '',
+                domain text not null default '',
+                owner text not null default '',
+                description text not null default '',
+                manual_core_level text
+            );
+            create table if not exists columns (
+                table_name text not null,
+                name text not null,
+                type text not null default '',
+                description text not null default '',
+                ordinal integer not null default 0,
+                primary key (table_name, name)
+            );
+            create table if not exists lineage (
+                upstream text not null,
+                downstream text not null,
+                via text not null default '',
+                primary key (upstream, downstream, via)
+            );
+            create table if not exists quality_rules (
+                table_name text not null,
+                rule_name text not null,
+                rule_type text not null default '',
+                target text not null default '',
+                enabled integer not null default 1,
+                last_status text not null default '',
+                last_checked_at text not null default '',
+                primary key (table_name, rule_name)
+            );
+            create table if not exists tasks (
+                id text primary key,
+                name text not null default '',
+                task_type text not null default '',
+                cycle text not null default '',
+                owner text not null default '',
+                status text not null default ''
+            );
+            create table if not exists task_tables (
+                task_id text not null,
+                table_name text not null,
+                direction text not null,
+                primary key (task_id, table_name, direction)
+            );
+            """
+        )
+        self.conn.commit()
+
+    def upsert_table(self, item):
+        self.conn.execute(
+            """
+            insert into tables (name, database_name, layer, domain, owner, description, manual_core_level)
+            values (?, ?, ?, ?, ?, ?, ?)
+            on conflict(name) do update set
+                database_name = excluded.database_name,
+                layer = excluded.layer,
+                domain = excluded.domain,
+                owner = excluded.owner,
+                description = excluded.description,
+                manual_core_level = excluded.manual_core_level
+            """,
+            (
+                item["name"],
+                item.get("database", ""),
+                item.get("layer", ""),
+                item.get("domain", ""),
+                item.get("owner", ""),
+                item.get("description", ""),
+                item.get("manual_core_level"),
+            ),
+        )
+        self.conn.commit()
+
+    def upsert_column(self, table_name, name, column_type="", description="", ordinal=0):
+        self.conn.execute(
+            """
+            insert into columns (table_name, name, type, description, ordinal)
+            values (?, ?, ?, ?, ?)
+            on conflict(table_name, name) do update set
+                type = excluded.type,
+                description = excluded.description,
+                ordinal = excluded.ordinal
+            """,
+            (table_name, name, column_type, description, ordinal),
+        )
+        self.conn.commit()
+
+    def upsert_lineage(self, upstream, downstream, via=""):
+        self.conn.execute(
+            "insert or replace into lineage (upstream, downstream, via) values (?, ?, ?)",
+            (upstream, downstream, via),
+        )
+        self.conn.commit()
+
+    def upsert_quality_rule(self, item):
+        self.conn.execute(
+            """
+            insert into quality_rules (table_name, rule_name, rule_type, target, enabled, last_status, last_checked_at)
+            values (?, ?, ?, ?, ?, ?, ?)
+            on conflict(table_name, rule_name) do update set
+                rule_type = excluded.rule_type,
+                target = excluded.target,
+                enabled = excluded.enabled,
+                last_status = excluded.last_status,
+                last_checked_at = excluded.last_checked_at
+            """,
+            (
+                item["table_name"],
+                item["rule_name"],
+                item.get("rule_type", ""),
+                item.get("target", ""),
+                1 if item.get("enabled", True) else 0,
+                item.get("last_status", ""),
+                item.get("last_checked_at", ""),
+            ),
+        )
+        self.conn.commit()
+
+    def upsert_task(self, item):
+        self.conn.execute(
+            """
+            insert into tasks (id, name, task_type, cycle, owner, status)
+            values (?, ?, ?, ?, ?, ?)
+            on conflict(id) do update set
+                name = excluded.name,
+                task_type = excluded.task_type,
+                cycle = excluded.cycle,
+                owner = excluded.owner,
+                status = excluded.status
+            """,
+            (
+                item["id"],
+                item.get("name", ""),
+                item.get("task_type", ""),
+                item.get("cycle", ""),
+                item.get("owner", ""),
+                item.get("status", ""),
+            ),
+        )
+        self.conn.execute("delete from task_tables where task_id = ?", (item["id"],))
+        for table_name in item.get("inputs", []):
+            self.conn.execute("insert into task_tables (task_id, table_name, direction) values (?, ?, 'input')", (item["id"], table_name))
+        for table_name in item.get("outputs", []):
+            self.conn.execute("insert into task_tables (task_id, table_name, direction) values (?, ?, 'output')", (item["id"], table_name))
+        self.conn.commit()
+
+    def get_task(self, task_id):
+        task = self._one("select * from tasks where id = ?", (task_id,))
+        if not task:
+            return {"error": "task_not_found", "task_id": task_id}
+        data = dict(task)
+        data["inputs"] = [row["table_name"] for row in self._all("select table_name from task_tables where task_id = ? and direction = 'input' order by table_name", (task_id,))]
+        data["outputs"] = [row["table_name"] for row in self._all("select table_name from task_tables where task_id = ? and direction = 'output' order by table_name", (task_id,))]
+        return data
+
+    def get_table_tasks(self, table_name):
+        rows = self._all(
+            """
+            select t.id, t.name, t.task_type, t.cycle, t.owner, t.status, tt.direction
+            from task_tables tt
+            join tasks t on t.id = tt.task_id
+            where tt.table_name = ?
+            order by tt.direction, t.name
+            """,
+            (table_name,),
+        )
+        return {"table_name": table_name, "tasks": [dict(row) for row in rows]}
+
+    def get_table_profile(self, table_name):
+        table = self._one("select * from tables where name = ?", (table_name,))
+        if not table:
+            return {"error": "table_not_found", "table_name": table_name}
+        rules = self._all("select * from quality_rules where table_name = ? order by rule_name", (table_name,))
+        return {
+            "table": self._table_dict(table),
+            "columns": [dict(row) for row in self._all("select name, type, description from columns where table_name = ? order by ordinal, name", (table_name,))],
+            "lineage": self.get_table_lineage(table_name),
+            "quality": {
+                "rule_count": len(rules),
+                "latest_status": self._latest_status(rules),
+                "rules": [dict(row) for row in rules],
+            },
+            "tasks": self.get_table_tasks(table_name)["tasks"],
+            "core": self.is_core_table(table_name),
+        }
+
+    def list_table_columns(self, table_name):
+        if not self._one("select 1 from tables where name = ?", (table_name,)):
+            return {"error": "table_not_found", "table_name": table_name}
+        return {"table_name": table_name, "columns": [dict(row) for row in self._all("select name, type, description from columns where table_name = ? order by ordinal, name", (table_name,))]}
+
+    def get_quality_status(self, table_name):
+        rules = self._all("select * from quality_rules where table_name = ? order by rule_name", (table_name,))
+        return {
+            "table_name": table_name,
+            "has_quality_monitoring": bool(rules),
+            "rule_count": len(rules),
+            "latest_status": self._latest_status(rules),
+            "rules": [dict(row) for row in rules],
+        }
+
+    def get_table_lineage(self, table_name):
+        upstream = self._all("select upstream, via from lineage where downstream = ? order by upstream", (table_name,))
+        downstream = self._all("select downstream, via from lineage where upstream = ? order by downstream", (table_name,))
+        return {
+            "upstream": [dict(row) for row in upstream],
+            "downstream": [dict(row) for row in downstream],
+        }
+
+    def search_assets(self, query):
+        like = f"%{query}%"
+        rows = self._all(
+            """
+            select name, database_name, layer, domain, owner, description
+            from tables
+            where name like ? or description like ? or domain like ?
+            order by name
+            limit 20
+            """,
+            (like, like, like),
+        )
+        return {"query": query, "results": [self._table_dict(row) for row in rows]}
+
+    def is_core_table(self, table_name):
+        table = self._one("select * from tables where name = ?", (table_name,))
+        if not table:
+            return {"error": "table_not_found", "table_name": table_name}
+        if table["manual_core_level"]:
+            return {"table_name": table_name, "is_core": True, "score": 100, "reasons": [f"manual core level: {table['manual_core_level']}"]}
+
+        score = 0
+        reasons = []
+        if table["layer"].lower() in {"dws", "ads"}:
+            score += 30
+            reasons.append(f"{table['layer']} layer")
+        if table["domain"].lower() in {"finance", "business", "customer", "order", "revenue"}:
+            score += 25
+            reasons.append(f"{table['domain']} domain")
+        downstream_count = self._one("select count(*) as n from lineage where upstream = ?", (table_name,))["n"]
+        if downstream_count:
+            score += min(25, downstream_count * 10)
+            reasons.append(f"{downstream_count} downstream assets")
+        rule_count = self._one("select count(*) as n from quality_rules where table_name = ?", (table_name,))["n"]
+        if rule_count:
+            score += 20
+            reasons.append("has quality rules")
+        return {"table_name": table_name, "is_core": score >= 60, "score": score, "reasons": reasons}
+
+    def _one(self, sql, args=()):
+        return self.conn.execute(sql, args).fetchone()
+
+    def _all(self, sql, args=()):
+        return self.conn.execute(sql, args).fetchall()
+
+    def _table_dict(self, row):
+        data = dict(row)
+        data["database"] = data.pop("database_name")
+        return data
+
+    def _latest_status(self, rules):
+        failed = [rule for rule in rules if rule["last_status"] == "failed"]
+        if failed:
+            return "failed"
+        return rules[0]["last_status"] if rules else "missing"

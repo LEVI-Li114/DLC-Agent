@@ -1,0 +1,52 @@
+{
+  "tables": [
+    {
+      "name": "dws_customer_order_daily",
+      "database": "dw",
+      "layer": "dws",
+      "domain": "customer",
+      "owner": "data-customer",
+      "description": "Customer order summary table.",
+      "columns": [
+        {
+          "name": "stat_date",
+          "type": "date",
+          "description": "Metric date"
+        },
+        {
+          "name": "customer_id",
+          "type": "string",
+          "description": "Customer ID"
+        },
+        {
+          "name": "order_count",
+          "type": "bigint",
+          "description": "Order count"
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task_001",
+      "name": "build_dws_customer_order_daily",
+      "task_type": "SQL",
+      "cycle": "DAY",
+      "owner": "etl-owner",
+      "status": "success",
+      "inputs": ["ods_order"],
+      "outputs": ["dws_customer_order_daily"]
+    }
+  ],
+  "quality_rules": [
+    {
+      "table_name": "dws_customer_order_daily",
+      "rule_name": "customer_id_not_null",
+      "rule_type": "not_null",
+      "target": "customer_id",
+      "enabled": true,
+      "last_status": "passed",
+      "last_checked_at": "2026-07-01T09:00:00"
+    }
+  ]
+}

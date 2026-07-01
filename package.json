@@ -1,0 +1,21 @@
+{
+  "name": "@baiying/dlc-agent-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WeData-first data asset MCP server launcher.",
+  "bin": {
+    "dlc-agent-mcp": "bin/dlc-agent-mcp.js"
+  },
+  "files": [
+    "bin",
+    "dlc_agent/*.py",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "python -m unittest discover -s tests -v"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}
