@@ -146,7 +146,7 @@ class McpTest(unittest.TestCase):
         )
 
         text = response["result"]["content"][0]["text"]
-        self.assertIn("| ID | 名称 | 类型 |", text)
+        self.assertIn("| ID | 名称 | 类型 | 负责人 | 花名 | 任务数 |", text)
         self.assertIn("mysql_prod", text)
 
     def test_calls_metadata_tool(self):

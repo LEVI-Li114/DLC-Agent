@@ -11,6 +11,7 @@ def make_store():
     store.upsert_table(
         {
             "name": "ads_customer_revenue_daily",
+            "data_source_id": "ds_001",
             "database": "bi",
             "layer": "ads",
             "domain": "finance",
@@ -34,6 +35,14 @@ def make_store():
             "last_checked_at": "2026-07-01T08:10:00",
         }
     )
+    store.upsert_task(
+        {
+            "id": "task_001",
+            "name": "ads_customer_revenue_daily",
+            "outputs": ["ads_customer_revenue_daily"],
+        }
+    )
+    store.upsert_data_source({"id": "ds_001", "name": "mysql_prod", "owner": "100043939904", "config": {}})
     return store
 
 
@@ -57,6 +66,12 @@ class AssetStoreTest(unittest.TestCase):
 
     def test_unknown_table_returns_not_found(self):
         self.assertEqual(make_store().get_table_profile("missing")["error"], "table_not_found")
+
+    def test_data_source_includes_owner_name_and_task_count(self):
+        source = make_store().get_data_source("ds_001")
+
+        self.assertEqual(source["owner_name"], "luyuan")
+        self.assertEqual(source["task_count"], 1)
 
 
 if __name__ == "__main__":

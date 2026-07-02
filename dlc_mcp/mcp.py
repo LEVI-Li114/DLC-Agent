@@ -162,12 +162,12 @@ def _format_markdown(tool_name, data):
     if tool_name == "list_data_sources":
         rows = data.get("results", [])
         return _section("数据源列表", [f"查询：`{_cell(data.get('query', ''))}`", f"数量：{len(rows)}"]) + "\n\n" + _table(
-            ["ID", "名称", "类型", "负责人", "库", "Host", "URL"],
-            [[r.get("id"), r.get("name"), r.get("type"), r.get("owner"), r.get("config", {}).get("database"), r.get("config", {}).get("host"), r.get("config", {}).get("url")] for r in rows],
+            ["ID", "名称", "类型", "负责人", "花名", "任务数", "库", "Host", "URL"],
+            [[r.get("id"), r.get("name"), r.get("type"), r.get("owner"), r.get("owner_name"), r.get("task_count"), r.get("config", {}).get("database"), r.get("config", {}).get("host"), r.get("config", {}).get("url")] for r in rows],
         )
     if tool_name == "get_data_source":
         config = data.get("config", {})
-        return _section("数据源详情", [f"ID：`{_cell(data.get('id'))}`", f"名称：**{_cell(data.get('name'))}**", f"类型：`{_cell(data.get('type'))}`", f"负责人：`{_cell(data.get('owner'))}`", f"描述：{_cell(data.get('description'))}"]) + "\n\n" + _table(
+        return _section("数据源详情", [f"ID：`{_cell(data.get('id'))}`", f"名称：**{_cell(data.get('name'))}**", f"类型：`{_cell(data.get('type'))}`", f"负责人：`{_cell(data.get('owner'))}` / `{_cell(data.get('owner_name'))}`", f"已关联任务数：**{data.get('task_count', 0)}**", f"描述：{_cell(data.get('description'))}"]) + "\n\n" + _table(
             ["配置项", "值"],
             [[k, v] for k, v in config.items()],
         )

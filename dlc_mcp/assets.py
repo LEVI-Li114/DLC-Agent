@@ -1,5 +1,6 @@
 import sqlite3
 import json
+import os
 
 
 class AssetStore:
@@ -14,6 +15,7 @@ class AssetStore:
             create table if not exists tables (
                 name text primary key,
                 source_guid text not null default '',
+                data_source_id text not null default '',
                 database_name text not null default '',
                 layer text not null default '',
                 domain text not null default '',
@@ -80,15 +82,17 @@ class AssetStore:
             """
         )
         self._add_column_if_missing("tables", "source_guid", "text not null default ''")
+        self._add_column_if_missing("tables", "data_source_id", "text not null default ''")
         self.conn.commit()
 
     def upsert_table(self, item):
         self.conn.execute(
             """
-            insert into tables (name, source_guid, database_name, layer, domain, owner, description, manual_core_level)
-            values (?, ?, ?, ?, ?, ?, ?, ?)
+            insert into tables (name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(name) do update set
                 source_guid = coalesce(nullif(excluded.source_guid, ''), tables.source_guid),
+                data_source_id = coalesce(nullif(excluded.data_source_id, ''), tables.data_source_id),
                 database_name = coalesce(nullif(excluded.database_name, ''), tables.database_name),
                 layer = coalesce(nullif(excluded.layer, ''), tables.layer),
                 domain = coalesce(nullif(excluded.domain, ''), tables.domain),
@@ -99,6 +103,7 @@ class AssetStore:
             (
                 item["name"],
                 item.get("guid", ""),
+                item.get("data_source_id", ""),
                 item.get("database", ""),
                 item.get("layer", ""),
                 item.get("domain", ""),
@@ -213,7 +218,7 @@ class AssetStore:
             from data_sources
             where ? = '' or id like ? or name like ? or type like ? or owner like ?
             order by name
-            limit 50
+            limit 200
             """,
             (query, like, like, like, like),
         )
@@ -227,7 +232,7 @@ class AssetStore:
 
     def list_metadata(self):
         databases = [row["database_name"] for row in self._all("select distinct database_name from tables where database_name != '' order by database_name")]
-        tables = [self._table_dict(row) for row in self._all("select name, source_guid, database_name, layer, domain, owner, description, manual_core_level from tables order by database_name, name limit 100")]
+        tables = [self._table_dict(row) for row in self._all("select name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level from tables order by database_name, name limit 100")]
         return {"databases": databases, "tables": tables}
 
     def upsert_task_run(self, item):
@@ -362,7 +367,7 @@ class AssetStore:
         like = f"%{query}%"
         rows = self._all(
             """
-            select name, source_guid, database_name, layer, domain, owner, description
+            select name, source_guid, data_source_id, database_name, layer, domain, owner, description
             from tables
             where name like ? or description like ? or domain like ?
             order by name
@@ -416,10 +421,33 @@ class AssetStore:
     def _data_source_dict(self, row):
         data = dict(row)
         data["config"] = json.loads(data.pop("config_json") or "{}")
+        data["owner_name"] = _owner_name(data["owner"])
+        data["task_count"] = self._data_source_task_count(data["id"])
         return data
+
+    def _data_source_task_count(self, data_source_id):
+        row = self._one(
+            """
+            select count(distinct tt.task_id) as n
+            from task_tables tt
+            join tables t on t.name = tt.table_name
+            where t.data_source_id = ?
+            """,
+            (data_source_id,),
+        )
+        return row["n"] if row else 0
 
     def _latest_status(self, rules):
         failed = [rule for rule in rules if rule["last_status"] == "failed"]
         if failed:
             return "failed"
         return rules[0]["last_status"] if rules else "missing"
+
+
+def _owner_name(owner_id):
+    aliases = {"100043939904": "luyuan"}
+    for item in os.environ.get("DLC_MCP_USER_ALIASES", "").split(","):
+        if ":" in item:
+            key, value = item.split(":", 1)
+            aliases[key.strip()] = value.strip()
+    return aliases.get(str(owner_id), str(owner_id))

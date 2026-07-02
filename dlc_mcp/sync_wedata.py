@@ -75,7 +75,7 @@ def _list_all(client, action, payload, page_size, max_pages=None):
         error = first["Response"]["Error"]
         raise RuntimeError(f"{action} failed: {error.get('Code')} {error.get('Message')}")
     data = first.get("Response", {}).get("Data", {})
-    total_pages = int(data.get("TotalPageNumber") or data.get("PageCount") or 1)
+    total_pages = int(data.get("TotalPageNumber") or data.get("PageCount") or _pages_from_total(data, page_size) or 1)
     items = list(data.get("Items") or [])
 
     stop_page = min(total_pages, max_pages or total_pages)
@@ -89,6 +89,11 @@ def _list_all(client, action, payload, page_size, max_pages=None):
     first["Response"]["Data"]["TotalPageNumber"] = total_pages
     first["Response"]["Data"]["SyncedPageNumber"] = stop_page
     return first
+
+
+def _pages_from_total(data, page_size):
+    total = int(data.get("TotalCount") or 0)
+    return (total + page_size - 1) // page_size if total else 0
 
 
 def _instance_window():

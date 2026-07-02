@@ -148,6 +148,7 @@ class WeDataImportTest(unittest.TestCase):
                                 {
                                     "Guid": "guid_1",
                                     "Name": "ads_bill_company_1d_di",
+                                    "DatasourceId": 55975,
                                     "DatabaseName": "byai_bigdata",
                                     "Description": "客户账单应用表",
                                     "TechnicalMetadata": {"Owner": "prod-bigdata"},
@@ -195,6 +196,7 @@ class WeDataImportTest(unittest.TestCase):
         )
 
         self.assertEqual(snapshot["tables"][0]["guid"], "guid_1")
+        self.assertEqual(snapshot["tables"][0]["data_source_id"], "55975")
         self.assertEqual(snapshot["tables"][0]["columns"][0]["name"], "company_id")
         self.assertEqual(snapshot["lineage"][0]["downstream"], "ads_bill_company_1d_di_report")
         self.assertEqual(snapshot["quality_rules"][0]["target"], "bill_amt")

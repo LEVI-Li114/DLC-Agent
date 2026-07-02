@@ -92,6 +92,7 @@ def _table_from_api(item):
     return {
         "name": name,
         "guid": _get(item, "Guid", "TableGuid", "TableId", "id"),
+        "data_source_id": str(_get(item, "DatasourceId", "DataSourceId", "DatasourceID", "DataSourceID", default="") or ""),
         "database": _get(item, "DatabaseName", "Database", "DbName", "database"),
         "layer": _get(item, "Layer", "TableLayer", "layer", default=_layer_from_name(name)),
         "domain": _get(item, "Domain", "BizDomain", "domain", default=_domain_from_tokens(name.lower().split("_"))),
