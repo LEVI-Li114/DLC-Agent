@@ -263,6 +263,20 @@ class AssetStore:
             return {"error": "data_source_not_found", "data_source_id": data_source_id}
         return self._data_source_dict(row)
 
+    def list_data_source_tasks(self, data_source_id):
+        if not self._one("select 1 from data_sources where id = ?", (data_source_id,)):
+            return {"error": "data_source_not_found", "data_source_id": data_source_id}
+        rows = self._all(
+            """
+            select task_id, task_name, task_type, project_id, project_name, create_time, owner
+            from data_source_tasks
+            where data_source_id = ?
+            order by task_name
+            """,
+            (data_source_id,),
+        )
+        return {"data_source_id": data_source_id, "tasks": [dict(row) for row in rows]}
+
     def list_metadata(self):
         databases = [row["database_name"] for row in self._all("select distinct database_name from tables where database_name != '' order by database_name")]
         tables = [self._table_dict(row) for row in self._all("select name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level from tables order by database_name, name limit 100")]

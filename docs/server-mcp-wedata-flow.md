@@ -216,7 +216,7 @@ Restart Codex, then ask:
 - Table metadata and fields: supported through optional `ListTable` and `GetTableColumns` sync
 - Downstream lineage: supported through optional `ListLineage` sync
 - Quality rules: supported through optional `ListQualityRules` sync
-- Data source listing and configuration lookup: local model and JSON import supported; live sync still needs follow-up work
+- Data source listing, configuration lookup, related task count, and related task details: supported through `ListDataSources` and `GetDataSourceRelatedTasks`
 - Metadata database/table listing: supported after optional metadata sync
 - Usage heat: not supported yet; needs query logs or BI/report access logs
 

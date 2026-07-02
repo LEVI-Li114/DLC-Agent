@@ -53,6 +53,10 @@ class McpTest(unittest.TestCase):
                 "config": {"host": "mysql.internal", "database": "crm"},
             }
         )
+        self.store.replace_data_source_tasks(
+            "ds_001",
+            [{"task_id": "sync_001", "task_name": "sync_mysql_prod", "task_type": "DataDevelopment", "project_name": "prod"}],
+        )
 
     def test_lists_tools(self):
         response = handle_request(self.store, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -61,6 +65,7 @@ class McpTest(unittest.TestCase):
         self.assertIn("get_table_profile", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("search_tasks", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("list_data_sources", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("list_data_source_tasks", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("list_metadata", [tool["name"] for tool in response["result"]["tools"]])
 
     def test_calls_table_profile_tool(self):
@@ -133,6 +138,21 @@ class McpTest(unittest.TestCase):
         )
 
         self.assertIn("mysql.internal", response["result"]["content"][0]["text"])
+
+    def test_calls_data_source_tasks_tool(self):
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {"name": "list_data_source_tasks", "arguments": {"data_source_id": "ds_001"}},
+            },
+        )
+
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("sync_mysql_prod", text)
+        self.assertIn("数据源关联任务", text)
 
     def test_data_sources_are_rendered_as_markdown_table(self):
         response = handle_request(

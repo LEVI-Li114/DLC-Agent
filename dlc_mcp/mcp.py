@@ -51,6 +51,10 @@ TOOLS = {
         "description": "Return one data source by id, including configuration details stored in the fact database.",
         "schema": {"type": "object", "properties": {"data_source_id": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["data_source_id"]},
     },
+    "list_data_source_tasks": {
+        "description": "List WeData tasks related to one data source.",
+        "schema": {"type": "object", "properties": {"data_source_id": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["data_source_id"]},
+    },
     "list_metadata": {
         "description": "List imported databases and table metadata.",
         "schema": {"type": "object", "properties": {}},
@@ -140,6 +144,11 @@ def _call_tool(store, request, live=None):
         if live and (args.get("live") or data.get("error")):
             live.sync_data_sources(args["data_source_id"])
             data = store.get_data_source(args["data_source_id"])
+    elif name == "list_data_source_tasks":
+        data = store.list_data_source_tasks(args["data_source_id"])
+        if live and (args.get("live") or not data.get("tasks")):
+            live.sync_data_sources(args["data_source_id"])
+            data = store.list_data_source_tasks(args["data_source_id"])
     elif name == "list_metadata":
         data = store.list_metadata()
     else:
@@ -170,6 +179,12 @@ def _format_markdown(tool_name, data):
         return _section("数据源详情", [f"ID：`{_cell(data.get('id'))}`", f"名称：**{_cell(data.get('name'))}**", f"类型：`{_cell(data.get('type'))}`", f"负责人：`{_cell(data.get('owner'))}` / `{_cell(data.get('owner_name'))}`", f"已关联任务数：**{data.get('task_count', 0)}**", f"描述：{_cell(data.get('description'))}"]) + "\n\n" + _table(
             ["配置项", "值"],
             [[k, v] for k, v in config.items()],
+        )
+    if tool_name == "list_data_source_tasks":
+        rows = data.get("tasks", [])
+        return _section("数据源关联任务", [f"数据源ID：`{_cell(data.get('data_source_id'))}`", f"任务数：{len(rows)}"]) + "\n\n" + _table(
+            ["TaskId", "任务名", "类型", "项目", "创建时间", "负责人"],
+            [[r.get("task_id"), r.get("task_name"), r.get("task_type"), r.get("project_name"), r.get("create_time"), r.get("owner")] for r in rows],
         )
     if tool_name == "search_tasks":
         rows = data.get("results", [])
