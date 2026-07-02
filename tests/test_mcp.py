@@ -101,7 +101,7 @@ class McpTest(unittest.TestCase):
             },
         )
 
-        self.assertIn("duration_seconds", response["result"]["content"][0]["text"])
+        self.assertIn("耗时秒", response["result"]["content"][0]["text"])
 
     def test_calls_get_task_runs_by_name_and_date(self):
         response = handle_request(
@@ -119,7 +119,7 @@ class McpTest(unittest.TestCase):
 
         text = response["result"]["content"][0]["text"]
         self.assertIn("build_dim_customer", text)
-        self.assertIn("duration_seconds", text)
+        self.assertIn("耗时秒", text)
 
     def test_calls_data_source_tools(self):
         response = handle_request(
@@ -133,6 +133,21 @@ class McpTest(unittest.TestCase):
         )
 
         self.assertIn("mysql.internal", response["result"]["content"][0]["text"])
+
+    def test_data_sources_are_rendered_as_markdown_table(self):
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {"name": "list_data_sources", "arguments": {"query": "mysql"}},
+            },
+        )
+
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("| ID | 名称 | 类型 |", text)
+        self.assertIn("mysql_prod", text)
 
     def test_calls_metadata_tool(self):
         response = handle_request(

@@ -145,7 +145,7 @@ def _call_tool(store, request, live=None):
     else:
         data = store.is_core_table(args["table_name"])
 
-    return _result(request, {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False, indent=2)}]})
+    return _result(request, {"content": [{"type": "text", "text": _format_markdown(name, data)}]})
 
 
 def _result(request, result):
@@ -154,3 +154,91 @@ def _result(request, result):
 
 def _error(request, code, message):
     return {"jsonrpc": "2.0", "id": request.get("id"), "error": {"code": code, "message": message}}
+
+
+def _format_markdown(tool_name, data):
+    if isinstance(data, dict) and data.get("error"):
+        return f"**未找到**\n\n- 错误：`{_cell(data['error'])}`\n" + "\n".join(f"- {k}: `{_cell(v)}`" for k, v in data.items() if k != "error")
+    if tool_name == "list_data_sources":
+        rows = data.get("results", [])
+        return _section("数据源列表", [f"查询：`{_cell(data.get('query', ''))}`", f"数量：{len(rows)}"]) + "\n\n" + _table(
+            ["ID", "名称", "类型", "负责人", "库", "Host", "URL"],
+            [[r.get("id"), r.get("name"), r.get("type"), r.get("owner"), r.get("config", {}).get("database"), r.get("config", {}).get("host"), r.get("config", {}).get("url")] for r in rows],
+        )
+    if tool_name == "get_data_source":
+        config = data.get("config", {})
+        return _section("数据源详情", [f"ID：`{_cell(data.get('id'))}`", f"名称：**{_cell(data.get('name'))}**", f"类型：`{_cell(data.get('type'))}`", f"负责人：`{_cell(data.get('owner'))}`", f"描述：{_cell(data.get('description'))}"]) + "\n\n" + _table(
+            ["配置项", "值"],
+            [[k, v] for k, v in config.items()],
+        )
+    if tool_name == "search_tasks":
+        rows = data.get("results", [])
+        return _section("任务搜索结果", [f"查询：`{_cell(data.get('query'))}`", f"数量：{len(rows)}"]) + "\n\n" + _table(
+            ["TaskId", "任务名", "类型", "负责人", "状态", "产出表"],
+            [[r.get("id"), r.get("name"), r.get("task_type"), r.get("owner"), r.get("status"), ", ".join(r.get("outputs") or [])] for r in rows],
+        )
+    if tool_name == "get_task_runs":
+        rows = data.get("runs", [])
+        title = f"任务运行实例：{data.get('task_name') or data.get('task_id')}"
+        return _section(title, [f"TaskId：`{_cell(data.get('task_id'))}`", f"数量：{len(rows)}"]) + "\n\n" + _table(
+            ["实例日期", "开始时间", "结束时间", "耗时秒", "状态", "实例ID"],
+            [[r.get("instance_date"), r.get("start_time"), r.get("end_time"), r.get("duration_seconds"), r.get("status"), r.get("instance_id")] for r in rows],
+        )
+    if tool_name == "list_table_columns":
+        return _section(f"字段列表：{data.get('table_name')}", [f"字段数：{len(data.get('columns', []))}"]) + "\n\n" + _table(
+            ["字段名", "类型", "说明"],
+            [[c.get("name"), c.get("type"), c.get("description")] for c in data.get("columns", [])],
+        )
+    if tool_name == "get_quality_status":
+        return _section(f"质量状态：{data.get('table_name')}", [f"是否有监控：{data.get('has_quality_monitoring')}", f"规则数：{data.get('rule_count')}", f"最新状态：`{_cell(data.get('latest_status'))}`"]) + "\n\n" + _table(
+            ["规则名", "类型", "目标", "启用", "状态", "检查时间"],
+            [[r.get("rule_name"), r.get("rule_type"), r.get("target"), r.get("enabled"), r.get("last_status"), r.get("last_checked_at")] for r in data.get("rules", [])],
+        )
+    if tool_name == "get_table_lineage":
+        upstream = _table(["上游", "经由"], [[r.get("upstream"), r.get("via")] for r in data.get("upstream", [])])
+        downstream = _table(["下游", "经由"], [[r.get("downstream"), r.get("via")] for r in data.get("downstream", [])])
+        return f"**血缘关系**\n\n上游：\n\n{upstream}\n\n下游：\n\n{downstream}"
+    if tool_name == "get_table_profile":
+        table = data.get("table", {})
+        core = data.get("core", {})
+        return "\n\n".join(
+            [
+                _section(
+                    f"表画像：{table.get('name')}",
+                    [
+                        f"库：`{_cell(table.get('database'))}`",
+                        f"层级：`{_cell(table.get('layer'))}`",
+                        f"领域：`{_cell(table.get('domain'))}`",
+                        f"负责人：`{_cell(table.get('owner'))}`",
+                        f"描述：{_cell(table.get('description'))}",
+                        f"核心表：**{core.get('is_core')}**，分数：**{core.get('score')}**，原因：{', '.join(core.get('reasons') or [])}",
+                    ],
+                ),
+                _format_markdown("list_table_columns", {"table_name": table.get("name"), "columns": data.get("columns", [])}),
+                _format_markdown("get_table_lineage", data.get("lineage", {})),
+                _format_markdown("get_quality_status", {"table_name": table.get("name"), "has_quality_monitoring": bool(data.get("quality", {}).get("rule_count")), **data.get("quality", {})}),
+                _section("相关任务", []) + "\n\n" + _table(["TaskId", "任务名", "方向", "状态"], [[t.get("id"), t.get("name"), t.get("direction"), t.get("status")] for t in data.get("tasks", [])]),
+            ]
+        )
+    if tool_name == "is_core_table":
+        return _section(f"核心表判断：{data.get('table_name')}", [f"是否核心：**{data.get('is_core')}**", f"分数：**{data.get('score')}**", f"原因：{', '.join(data.get('reasons') or [])}"])
+    return "```json\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n```"
+
+
+def _section(title, lines):
+    body = "\n".join(f"- {line}" for line in lines if line)
+    return f"**{title}**" + (f"\n\n{body}" if body else "")
+
+
+def _table(headers, rows):
+    if not rows:
+        return "_无数据_"
+    header = "| " + " | ".join(headers) + " |"
+    sep = "| " + " | ".join(["---"] * len(headers)) + " |"
+    body = ["| " + " | ".join(_cell(v) for v in row) + " |" for row in rows]
+    return "\n".join([header, sep, *body])
+
+
+def _cell(value):
+    text = "" if value is None else str(value)
+    return text.replace("|", "\\|").replace("\n", " ")
