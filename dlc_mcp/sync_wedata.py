@@ -31,6 +31,13 @@ def main():
         metadata_dump = _sync_metadata(client, project_id, table_names, page_size, work_dir)
         dump.update(metadata_dump)
 
+    if os.environ.get("WEDATA_SYNC_DATA_SOURCES") == "1":
+        data_sources_response = _list_all(client, "ListDataSources", {"ProjectId": project_id}, page_size)
+        data_sources_path = os.path.join(work_dir, "wedata_data_sources.json")
+        with open(data_sources_path, "w", encoding="utf-8") as f:
+            json.dump(data_sources_response, f, ensure_ascii=False, indent=2)
+        dump["data_sources"] = data_sources_response
+
     if os.environ.get("WEDATA_SYNC_INSTANCES") == "1":
         instance_payload = {"ProjectId": project_id}
         start_time, end_time = _instance_window()
@@ -58,6 +65,8 @@ def main():
         print(f"synced {run_total} WeData task instances")
     if "tables" in dump:
         print(f"synced metadata for {len(dump['tables']['Response']['Data']['Items'])} tables")
+    if "data_sources" in dump:
+        print(f"synced {len(dump['data_sources']['Response']['Data']['Items'])} WeData data sources")
 
 
 def _list_all(client, action, payload, page_size, max_pages=None):

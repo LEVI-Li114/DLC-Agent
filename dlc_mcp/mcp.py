@@ -8,23 +8,23 @@ TOOLS = {
     },
     "search_tasks": {
         "description": "Search WeData ETL tasks by id, name, owner, or status.",
-        "schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        "schema": {"type": "object", "properties": {"query": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["query"]},
     },
     "get_table_profile": {
         "description": "Return table metadata, columns, lineage, quality status, and core-table decision.",
-        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}}, "required": ["table_name"]},
+        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["table_name"]},
     },
     "list_table_columns": {
         "description": "List fields for a table.",
-        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}}, "required": ["table_name"]},
+        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["table_name"]},
     },
     "get_quality_status": {
         "description": "Return quality monitoring rules and latest status for a table.",
-        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}}, "required": ["table_name"]},
+        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["table_name"]},
     },
     "get_table_lineage": {
         "description": "Return upstream and downstream assets for a table.",
-        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}}, "required": ["table_name"]},
+        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["table_name"]},
     },
     "get_table_tasks": {
         "description": "Return ETL tasks that read from or produce a table.",
@@ -39,16 +39,17 @@ TOOLS = {
                 "task_name": {"type": "string"},
                 "instance_date": {"type": "string"},
                 "limit": {"type": "integer"},
+                "live": {"type": "boolean"},
             },
         },
     },
     "list_data_sources": {
         "description": "List data sources and their stored configuration summary.",
-        "schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+        "schema": {"type": "object", "properties": {"query": {"type": "string"}, "live": {"type": "boolean"}}},
     },
     "get_data_source": {
         "description": "Return one data source by id, including configuration details stored in the fact database.",
-        "schema": {"type": "object", "properties": {"data_source_id": {"type": "string"}}, "required": ["data_source_id"]},
+        "schema": {"type": "object", "properties": {"data_source_id": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["data_source_id"]},
     },
     "list_metadata": {
         "description": "List imported databases and table metadata.",
@@ -61,7 +62,7 @@ TOOLS = {
 }
 
 
-def handle_request(store, request):
+def handle_request(store, request, live=None):
     method = request.get("method")
     if method == "initialize":
         return _result(request, {"protocolVersion": "2024-11-05", "serverInfo": {"name": "dlc-mcp", "version": "0.1.0"}, "capabilities": {"tools": {}}})
@@ -76,13 +77,13 @@ def handle_request(store, request):
         ]
         return _result(request, {"tools": tools})
     if method == "tools/call":
-        return _call_tool(store, request)
+        return _call_tool(store, request, live)
     if method == "notifications/initialized":
         return None
     return _error(request, -32601, "method_not_found")
 
 
-def _call_tool(store, request):
+def _call_tool(store, request, live=None):
     params = request.get("params") or {}
     name = params.get("name")
     args = params.get("arguments") or {}
@@ -93,25 +94,52 @@ def _call_tool(store, request):
         data = store.search_assets(args["query"])
     elif name == "search_tasks":
         data = store.search_tasks(args["query"])
+        if live and (args.get("live") or not data["results"]):
+            live.sync_tasks(args["query"])
+            data = store.search_tasks(args["query"])
     elif name == "get_table_profile":
         data = store.get_table_profile(args["table_name"])
+        if live and (args.get("live") or data.get("error") or not data.get("columns")):
+            live.sync_table(args["table_name"])
+            data = store.get_table_profile(args["table_name"])
     elif name == "list_table_columns":
         data = store.list_table_columns(args["table_name"])
+        if live and (args.get("live") or data.get("error") or not data.get("columns")):
+            live.sync_table(args["table_name"])
+            data = store.list_table_columns(args["table_name"])
     elif name == "get_quality_status":
         data = store.get_quality_status(args["table_name"])
+        if live and args.get("live"):
+            live.sync_table(args["table_name"])
+            data = store.get_quality_status(args["table_name"])
     elif name == "get_table_lineage":
         data = store.get_table_lineage(args["table_name"])
+        if live and (args.get("live") or not data["downstream"]):
+            live.sync_table(args["table_name"])
+            data = store.get_table_lineage(args["table_name"])
     elif name == "get_table_tasks":
         data = store.get_table_tasks(args["table_name"])
     elif name == "get_task_runs":
         if args.get("task_name"):
             data = store.get_task_runs_by_name(args["task_name"], args.get("limit", 10), args.get("instance_date", ""))
+            if live and (args.get("live") or not data.get("runs")):
+                live.sync_task_runs(task_name=args["task_name"], instance_date=args.get("instance_date", ""))
+                data = store.get_task_runs_by_name(args["task_name"], args.get("limit", 10), args.get("instance_date", ""))
         else:
             data = store.get_task_runs(args["task_id"], args.get("limit", 10), args.get("instance_date", ""))
+            if live and (args.get("live") or not data.get("runs")):
+                live.sync_task_runs(task_id=args["task_id"], instance_date=args.get("instance_date", ""))
+                data = store.get_task_runs(args["task_id"], args.get("limit", 10), args.get("instance_date", ""))
     elif name == "list_data_sources":
         data = store.list_data_sources(args.get("query", ""))
+        if live and (args.get("live") or not data["results"]):
+            live.sync_data_sources(args.get("query", ""))
+            data = store.list_data_sources(args.get("query", ""))
     elif name == "get_data_source":
         data = store.get_data_source(args["data_source_id"])
+        if live and (args.get("live") or data.get("error")):
+            live.sync_data_sources(args["data_source_id"])
+            data = store.get_data_source(args["data_source_id"])
     elif name == "list_metadata":
         data = store.list_metadata()
     else:

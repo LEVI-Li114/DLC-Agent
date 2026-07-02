@@ -142,6 +142,58 @@ class McpTest(unittest.TestCase):
 
         self.assertIn("dim_customer", response["result"]["content"][0]["text"])
 
+    def test_live_fallback_search_tasks(self):
+        live = FakeLive(self.store)
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/call",
+                "params": {"name": "search_tasks", "arguments": {"query": "live_task"}},
+            },
+            live,
+        )
+
+        self.assertIn("live_task", response["result"]["content"][0]["text"])
+        self.assertEqual(live.calls, ["sync_tasks"])
+
+    def test_live_fallback_data_sources(self):
+        live = FakeLive(self.store)
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {"name": "list_data_sources", "arguments": {"query": "live_ds"}},
+            },
+            live,
+        )
+
+        self.assertIn("live_ds", response["result"]["content"][0]["text"])
+
+
+class FakeLive:
+    def __init__(self, store):
+        self.store = store
+        self.calls = []
+
+    def sync_tasks(self, query):
+        self.calls.append("sync_tasks")
+        self.store.upsert_task({"id": "live_001", "name": query, "task_type": "32", "status": "Y"})
+
+    def sync_data_sources(self, query=""):
+        self.calls.append("sync_data_sources")
+        self.store.upsert_data_source({"id": "ds_live", "name": query, "type": "MYSQL", "owner": "owner", "config": {"database": "db"}})
+
+    def sync_table(self, table_name):
+        self.calls.append("sync_table")
+        self.store.upsert_table({"name": table_name, "layer": "ads", "domain": "finance"})
+
+    def sync_task_runs(self, task_name="", task_id="", instance_date=""):
+        self.calls.append("sync_task_runs")
+
 
 if __name__ == "__main__":
     unittest.main()

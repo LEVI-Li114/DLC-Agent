@@ -46,6 +46,7 @@ DLC_MCP_DB=/data/dlc-mcp/assets.db
 WEDATA_SYNC_METADATA=0
 WEDATA_METADATA_TABLE_LIMIT=50
 WEDATA_METADATA_TABLES=
+WEDATA_SYNC_DATA_SOURCES=0
 WEDATA_SYNC_INSTANCES=0
 WEDATA_INSTANCE_LOOKBACK_DAYS=2
 WEDATA_INSTANCE_KEYWORDS=
@@ -146,7 +147,7 @@ This populates task start time, end time, duration, and status for `get_task_run
 
 If `WEDATA_INSTANCE_START` and `WEDATA_INSTANCE_END` are empty, the sync uses a rolling window. With `WEDATA_INSTANCE_LOOKBACK_DAYS=2`, every cron run syncs yesterday and today.
 
-Use `WEDATA_INSTANCE_KEYWORDS` to limit instance sync to task names or task ids. Full-project instance sync can be very large, so do not enable it in the 10-minute cron without a keyword filter.
+Use `WEDATA_INSTANCE_KEYWORDS` to limit instance sync to task names or task ids. Full-project instance sync can be very large, so do not enable it in scheduled sync without a keyword filter.
 
 ## 7. Smoke Test MCP On Server
 

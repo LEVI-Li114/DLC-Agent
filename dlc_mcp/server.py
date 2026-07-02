@@ -4,6 +4,7 @@ import sqlite3
 import sys
 
 from .assets import AssetStore
+from .live import LiveWeData
 from .mcp import handle_request
 
 
@@ -15,11 +16,12 @@ def main():
     conn = sqlite3.connect(db_path)
     store = AssetStore(conn)
     store.init_schema()
+    live = LiveWeData(store) if os.environ.get("TENCENTCLOUD_SECRET_ID") and os.environ.get("TENCENTCLOUD_SECRET_KEY") and os.environ.get("WEDATA_PROJECT_ID") else None
 
     for line in sys.stdin:
         if not line.strip():
             continue
-        response = handle_request(store, json.loads(line))
+        response = handle_request(store, json.loads(line), live)
         if response is not None:
             sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
             sys.stdout.flush()

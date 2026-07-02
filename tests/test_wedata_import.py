@@ -225,6 +225,34 @@ class WeDataImportTest(unittest.TestCase):
         self.assertEqual(snapshot["data_sources"][0]["name"], "mysql_prod")
         self.assertEqual(snapshot["data_sources"][0]["config"]["host"], "mysql.internal")
 
+    def test_maps_real_list_data_sources_properties(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "data_sources": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "Id": 73103,
+                                    "Name": "tech_support",
+                                    "Type": "MYSQL",
+                                    "CreateUser": "100043939904",
+                                    "Description": "技术支持",
+                                    "ProdConProperties": "{\"ip\":\"172.19.128.6\",\"port\":\"3306\",\"db\":\"flow_boost\",\"url\":\"jdbc:mysql://172.19.128.6:3306/flow_boost\",\"username\":\"tech_support\",\"password\":\"********\"}",
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        data_source = snapshot["data_sources"][0]
+        self.assertEqual(data_source["id"], "73103")
+        self.assertEqual(data_source["owner"], "100043939904")
+        self.assertEqual(data_source["config"]["database"], "flow_boost")
+        self.assertEqual(data_source["config"]["username"], "tech_support")
+
     def test_maps_real_list_tasks_fields(self):
         snapshot = snapshot_from_api_dump(
             {

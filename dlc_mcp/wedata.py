@@ -194,19 +194,47 @@ def _task_instance_from_api(item):
 
 
 def _data_source_from_api(item):
+    config_source = _json_dict(_get(item, "ProdConProperties", "DevConProperties", default=""))
     config = {}
-    for source_key, target_key in (("Host", "host"), ("Port", "port"), ("DatabaseName", "database"), ("DbName", "database"), ("VpcId", "vpc_id")):
+    for source_key, target_key in (
+        ("Host", "host"),
+        ("ip", "host"),
+        ("vip", "vip"),
+        ("Port", "port"),
+        ("port", "port"),
+        ("DatabaseName", "database"),
+        ("DbName", "database"),
+        ("db", "database"),
+        ("VpcId", "vpc_id"),
+        ("vpcId", "vpc_id"),
+        ("url", "url"),
+        ("vurl", "vurl"),
+        ("region", "region"),
+        ("username", "username"),
+    ):
         value = _get(item, source_key, default=None)
+        if value is None and config_source:
+            value = config_source.get(source_key)
         if value is not None:
             config[target_key] = value
     return {
         "id": str(_get(item, "DataSourceId", "DatasourceId", "Id", "id")),
         "name": _get(item, "DataSourceName", "DatasourceName", "Name", "name"),
         "type": _get(item, "Type", "DataSourceType", "DatasourceType", "type"),
-        "owner": _get(item, "Owner", "OwnerName", "OwnerUin", "owner"),
+        "owner": _get(item, "Owner", "OwnerName", "OwnerUin", "CreateUser", "owner"),
         "description": _get(item, "Description", "Remark", "Comment", "description"),
         "config": config,
     }
+
+
+def _json_dict(value):
+    if not value:
+        return {}
+    try:
+        data = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _duration_seconds(item, cost_time):
