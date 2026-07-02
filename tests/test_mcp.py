@@ -71,6 +71,7 @@ class McpTest(unittest.TestCase):
         self.assertIn("list_data_sources", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("list_data_source_tasks", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("get_table_risk_profile", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("get_asset_value_profile", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("list_quality_gaps", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("get_expert_label", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("list_expert_review_queue", [tool["name"] for tool in response["result"]["tools"]])
@@ -200,6 +201,21 @@ class McpTest(unittest.TestCase):
         text = response["result"]["content"][0]["text"]
         self.assertIn("风险等级：**高**", text)
         self.assertIn("missing quality rules", text)
+
+    def test_calls_asset_value_profile_tool(self):
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 16,
+                "method": "tools/call",
+                "params": {"name": "get_asset_value_profile", "arguments": {"table_name": "dwd_sms_bill"}},
+            },
+        )
+
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("资产价值模型", text)
+        self.assertIn("L2 重要公共资产", text)
 
     def test_calls_quality_gaps_tool(self):
         response = handle_request(

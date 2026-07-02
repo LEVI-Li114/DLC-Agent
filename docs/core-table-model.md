@@ -1,57 +1,78 @@
-# Core Table Model
+# Asset Value and Core Table Model
 
-Core table judgment must be explainable. The model should never answer only "yes" or "no"; it must return the score and reasons.
+This model answers two questions for every synced table:
 
-## Current v1 scoring
+- `value_tier`: how important the asset is.
+- `core_level`: whether the table must be governed as a core table.
 
-Score threshold:
+Asset type is intentionally excluded for now.
 
-```text
-core table = score >= 60
-```
-
-Rules:
-
-- `manual_core_level`: 100 points. Manual business confirmation wins.
-- `ads` or `dws` layer: +30. These are closer to BI and reusable domain aggregates.
-- Core domain: +25. Current domains: `finance`, `business`, `customer`, `order`, `revenue`.
-- Downstream dependencies: +10 per downstream asset, max +25.
-- Has quality rules: +20.
-
-## Recommended v2 scoring
-
-Keep the same explainable shape, but split evidence into five dimensions:
+## Priority
 
 ```text
-core_score =
-  business_value * 0.30 +
-  lineage_impact * 0.25 +
-  usage_heat * 0.20 +
-  production_criticality * 0.15 +
-  governance_readiness * 0.10
+expert label > model score > raw metadata
 ```
 
-Dimensions:
+If an expert label has `value_tier` or `core_level`, it wins. The model still keeps facts such as lineage, quality rules, and task runs visible.
 
-- `business_value`: finance, revenue, customer, order, funnel, operation dashboards, or manually marked business-critical.
-- `lineage_impact`: downstream task count, downstream table count, BI/report dependency count, cross-domain reuse.
-- `usage_heat`: recent query count, report access count, task read frequency, active users in the last 30 days.
-- `production_criticality`: schedule frequency, SLA, recent run stability, whether delayed output blocks ADS/BI.
-- `governance_readiness`: owner exists, field descriptions, quality rules, permission owner, lineage completeness.
+## Value Tiers
 
-Interpretation:
+| Tier | Meaning |
+| --- | --- |
+| L0 战略核心资产 | Company-level asset. A failure can affect financial settlement, customer bills, executive dashboards, or major decisions. |
+| L1 业务核心资产 | Core asset for one business domain. A failure affects key domain reports, analysis, or downstream production tables. |
+| L2 重要公共资产 | Reused by multiple downstream tasks or reports, but not yet business-critical. |
+| L3 普通业务资产 | Single-purpose or limited-impact asset. |
+| L4 低价值/待治理资产 | Temporary, test, backup, deprecated, or low-impact asset. |
 
-- `P0 core`: score >= 85, critical financial/business/customer/order table.
-- `P1 core`: score 70-84, important domain table or widely reused aggregate.
-- `P2 important`: score 60-69, meaningful but limited impact.
-- `non-core`: score < 60.
+## Core Levels
 
-## Why not use only heat
+| Level | Meaning |
+| --- | --- |
+| P0 | Strategic core table. Must have owner, lineage, quality rules, timeliness monitoring, and expert confirmation. |
+| P1 | Business core table. Must have owner, lineage, quality rules, and timeliness monitoring. |
+| P2 | Important table. Should be reviewed and governed, but not a hard core table yet. |
+| 非核心 | Normal table. Basic metadata is enough unless expert review says otherwise. |
 
-Heat alone can be misleading:
+## Current Score
 
-- A temporary ad hoc table can be hot but not core.
-- A monthly finance table can be low-frequency but critical.
-- A dimension table can be small but high-impact because many facts depend on it.
+The implemented score is intentionally simple and explainable:
 
-Use heat plus lineage plus business value. Manual confirmation remains the override for tables that the model cannot infer.
+| Dimension | Max | Evidence |
+| --- | ---: | --- |
+| `business_value` | 30 | Domain or table-name keywords such as bill, cost, amount, consume, revenue, pay, refund, order, customer, company. |
+| `lineage_impact` | 25 | Downstream dependency count. 10+ gets 25, 5-9 gets 15, 1-4 gets 8. |
+| `layer_position` | 15 | dwd/dws/ads get 15, dim gets 10, ods gets 5. |
+| `governance_readiness` | 10 | Existing quality rules. |
+| `run_stability` | 5 | Latest output task runs have no abnormal status. |
+| `usage_heat` | 0 | Reserved. Not scored until query/report logs are integrated. |
+
+Temporary/test/backup tables reduce business value and cap lineage impact.
+
+## Score to Tier
+
+| Score | Tier | Core Level |
+| ---: | --- | --- |
+| >= 85 | L0 战略核心资产 | P0 |
+| 70-84 | L1 业务核心资产 | P1 |
+| 50-69 | L2 重要公共资产 | P2 |
+| 25-49 | L3 普通业务资产 | 非核心 |
+| < 25 | L4 低价值/待治理资产 | 非核心 |
+
+## MCP Usage
+
+Use:
+
+```text
+get_asset_value_profile(table_name)
+```
+
+The response includes:
+
+- value tier
+- core level
+- core-table boolean
+- total score
+- per-dimension score
+- evidence
+- expert label, if present

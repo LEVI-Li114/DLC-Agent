@@ -473,6 +473,47 @@ class AssetStore:
             "core": self.is_core_table(table_name),
         }
 
+    def get_asset_value_profile(self, table_name):
+        table = self._one("select * from tables where name = ?", (table_name,))
+        if not table:
+            return {"error": "table_not_found", "table_name": table_name}
+        label = self._label_or_none("table", table_name)
+        downstream_count = self._one("select count(*) as n from lineage where upstream = ?", (table_name,))["n"]
+        rule_count = self._one("select count(*) as n from quality_rules where table_name = ?", (table_name,))["n"]
+        latest_runs = self._latest_output_task_runs(table_name)
+        failed_runs = [run for run in latest_runs if _is_bad_run_status(run.get("status", ""))]
+
+        if label and (label.get("value_tier") or label.get("core_level")):
+            value_tier = label.get("value_tier") or _value_tier_from_core_level(label.get("core_level", ""))
+            core_level = label.get("core_level") or _core_level_from_value_tier(value_tier)
+            return {
+                "table_name": table_name,
+                "value_tier": value_tier,
+                "core_level": core_level,
+                "is_core": core_level in {"P0", "P1", "核心"},
+                "score": 100,
+                "source": "expert",
+                "dimensions": {"expert_override": 100},
+                "evidence": [f"expert label: {core_level or value_tier}", label.get("reason", "")],
+                "expert_label": label,
+            }
+
+        dimensions = _asset_value_dimensions(dict(table), downstream_count, rule_count, failed_runs)
+        score = sum(dimensions.values())
+        value_tier = _value_tier_from_score(score)
+        core_level = _core_level_from_score(score)
+        return {
+            "table_name": table_name,
+            "value_tier": value_tier,
+            "core_level": core_level,
+            "is_core": core_level in {"P0", "P1"},
+            "score": score,
+            "source": "model",
+            "dimensions": dimensions,
+            "evidence": _asset_value_evidence(dict(table), downstream_count, rule_count, failed_runs),
+            "expert_label": None,
+        }
+
     def get_table_risk_profile(self, table_name):
         profile = self.get_table_profile(table_name)
         if profile.get("error"):
@@ -574,32 +615,10 @@ class AssetStore:
         return {"query": query, "results": [self._table_dict(row) for row in rows]}
 
     def is_core_table(self, table_name):
-        table = self._one("select * from tables where name = ?", (table_name,))
-        if not table:
-            return {"error": "table_not_found", "table_name": table_name}
-        label = self._label_or_none("table", table_name)
-        if label and label.get("core_level"):
-            return {"table_name": table_name, "is_core": label["core_level"] in {"P0", "P1", "核心"}, "score": 100, "reasons": [f"expert core level: {label['core_level']}"]}
-        if table["manual_core_level"]:
-            return {"table_name": table_name, "is_core": True, "score": 100, "reasons": [f"manual core level: {table['manual_core_level']}"]}
-
-        score = 0
-        reasons = []
-        if table["layer"].lower() in {"dws", "ads"}:
-            score += 30
-            reasons.append(f"{table['layer']} layer")
-        if table["domain"].lower() in {"finance", "business", "customer", "order", "revenue"}:
-            score += 25
-            reasons.append(f"{table['domain']} domain")
-        downstream_count = self._one("select count(*) as n from lineage where upstream = ?", (table_name,))["n"]
-        if downstream_count:
-            score += min(25, downstream_count * 10)
-            reasons.append(f"{downstream_count} downstream assets")
-        rule_count = self._one("select count(*) as n from quality_rules where table_name = ?", (table_name,))["n"]
-        if rule_count:
-            score += 20
-            reasons.append("has quality rules")
-        return {"table_name": table_name, "is_core": score >= 60, "score": score, "reasons": reasons}
+        value = self.get_asset_value_profile(table_name)
+        if value.get("error"):
+            return value
+        return {"table_name": table_name, "is_core": value["is_core"], "score": value["score"], "reasons": value["evidence"], "core_level": value["core_level"], "value_tier": value["value_tier"]}
 
     def _one(self, sql, args=()):
         return self.conn.execute(sql, args).fetchone()
@@ -679,6 +698,98 @@ def _risk_suggestions(rule_count, downstream_count, failed_runs):
     if failed_runs:
         suggestions.append("检查最近产出任务失败或异常状态，并补充产出时效监控")
     return suggestions
+
+
+def _asset_value_dimensions(table, downstream_count, rule_count, failed_runs):
+    name = table["name"].lower()
+    domain = (table["domain"] or "").lower()
+    layer = (table["layer"] or "").lower()
+    business_value = 0
+    if domain in {"finance", "revenue", "business", "customer", "order"} or _has_business_keyword(name):
+        business_value = 30
+    elif domain:
+        business_value = 15
+
+    lineage_impact = 0
+    if downstream_count >= 10:
+        lineage_impact = 25
+    elif downstream_count >= 5:
+        lineage_impact = 15
+    elif downstream_count > 0:
+        lineage_impact = 8
+
+    layer_position = {"dwd": 15, "dws": 15, "ads": 15, "dim": 10, "ods": 5}.get(layer, 0)
+    governance = 10 if rule_count else 0
+    stability = 0 if failed_runs else 5
+    if name.startswith("tmp_") or name.endswith(("_tmp", "_test", "_bak", "_back")):
+        business_value -= 30
+        lineage_impact = min(lineage_impact, 5)
+    return {
+        "business_value": max(0, business_value),
+        "lineage_impact": lineage_impact,
+        "layer_position": layer_position,
+        "governance_readiness": governance,
+        "run_stability": stability,
+        "usage_heat": 0,
+    }
+
+
+def _asset_value_evidence(table, downstream_count, rule_count, failed_runs):
+    evidence = []
+    name = table["name"].lower()
+    if table["domain"]:
+        evidence.append(f"{table['domain']} domain")
+    if _has_business_keyword(name):
+        evidence.append("business-critical keywords in table name")
+    if downstream_count:
+        evidence.append(f"{downstream_count} downstream assets")
+    if table["layer"]:
+        evidence.append(f"{table['layer']} layer")
+    evidence.append(f"{rule_count} quality rules")
+    if failed_runs:
+        evidence.append(f"{len(failed_runs)} latest task runs abnormal")
+    return evidence
+
+
+def _has_business_keyword(name):
+    keywords = {"bill", "cost", "amount", "consume", "revenue", "pay", "refund", "income", "order", "customer", "company"}
+    return bool(keywords & set(name.split("_")))
+
+
+def _value_tier_from_score(score):
+    if score >= 85:
+        return "L0 战略核心资产"
+    if score >= 70:
+        return "L1 业务核心资产"
+    if score >= 50:
+        return "L2 重要公共资产"
+    if score >= 25:
+        return "L3 普通业务资产"
+    return "L4 低价值/待治理资产"
+
+
+def _core_level_from_score(score):
+    if score >= 85:
+        return "P0"
+    if score >= 70:
+        return "P1"
+    if score >= 50:
+        return "P2"
+    return "非核心"
+
+
+def _value_tier_from_core_level(core_level):
+    return {"P0": "L0 战略核心资产", "P1": "L1 业务核心资产", "P2": "L2 重要公共资产", "核心": "L0 战略核心资产"}.get(core_level, "")
+
+
+def _core_level_from_value_tier(value_tier):
+    if value_tier.startswith("L0"):
+        return "P0"
+    if value_tier.startswith("L1"):
+        return "P1"
+    if value_tier.startswith("L2"):
+        return "P2"
+    return "非核心"
 
 
 def _owner_name(owner_id):

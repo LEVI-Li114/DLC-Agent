@@ -59,6 +59,10 @@ TOOLS = {
         "description": "Return table risk level based on lineage, quality rules, and latest output task runs.",
         "schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["table_name"]},
     },
+    "get_asset_value_profile": {
+        "description": "Return reusable asset value tier and core-table decision for a table.",
+        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["table_name"]},
+    },
     "list_quality_gaps": {
         "description": "List tables with downstream dependencies but no quality rules.",
         "schema": {"type": "object", "properties": {"layer": {"type": "string"}, "domain": {"type": "string"}, "limit": {"type": "integer"}}},
@@ -170,6 +174,11 @@ def _call_tool(store, request, live=None):
         if live and (args.get("live") or data.get("error")):
             live.sync_table(args["table_name"])
             data = store.get_table_risk_profile(args["table_name"])
+    elif name == "get_asset_value_profile":
+        data = store.get_asset_value_profile(args["table_name"])
+        if live and (args.get("live") or data.get("error")):
+            live.sync_table(args["table_name"])
+            data = store.get_asset_value_profile(args["table_name"])
     elif name == "list_quality_gaps":
         data = store.list_quality_gaps(args.get("layer", ""), args.get("domain", ""), args.get("limit", 50))
     elif name == "get_expert_label":
@@ -234,6 +243,8 @@ def _format_markdown(tool_name, data):
                 ),
             ]
         )
+    if tool_name == "get_asset_value_profile":
+        return _format_asset_value_profile(data)
     if tool_name == "list_quality_gaps":
         rows = data.get("results", [])
         return _section("质量监控缺口", [f"层级：`{_cell(data.get('layer'))}`", f"领域：`{_cell(data.get('domain'))}`", f"数量：{len(rows)}"]) + "\n\n" + _table(
@@ -324,6 +335,30 @@ def _format_expert_label(label):
             f"原因：{_cell(label.get('reason'))}",
             f"更新时间：`{_cell(label.get('updated_at'))}`",
         ],
+    )
+
+
+def _format_asset_value_profile(data):
+    dimensions = data.get("dimensions") or {}
+    return "\n\n".join(
+        [
+            _section(
+                f"资产价值模型：{data.get('table_name')}",
+                [
+                    f"价值分层：**{_cell(data.get('value_tier'))}**",
+                    f"核心等级：**{_cell(data.get('core_level'))}**",
+                    f"是否核心表：**{data.get('is_core')}**",
+                    f"模型来源：`{_cell(data.get('source'))}`",
+                    f"总分：**{data.get('score')}**",
+                    f"依据：{', '.join(data.get('evidence') or [])}",
+                ],
+            ),
+            _table(
+                ["维度", "分数"],
+                [[key, value] for key, value in dimensions.items()],
+            ),
+            _format_expert_label(data.get("expert_label")),
+        ]
     )
 
 

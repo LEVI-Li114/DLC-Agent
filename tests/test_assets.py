@@ -67,11 +67,12 @@ class AssetStoreTest(unittest.TestCase):
     def test_core_table_decision_is_explainable(self):
         decision = make_store().is_core_table("ads_customer_revenue_daily")
 
-        self.assertIs(decision["is_core"], True)
-        self.assertGreaterEqual(decision["score"], 70)
+        self.assertIs(decision["is_core"], False)
+        self.assertEqual(decision["core_level"], "P2")
+        self.assertGreaterEqual(decision["score"], 50)
         self.assertIn("ads layer", decision["reasons"])
         self.assertIn("finance domain", decision["reasons"])
-        self.assertIn("has quality rules", decision["reasons"])
+        self.assertIn("1 quality rules", decision["reasons"])
 
     def test_unknown_table_returns_not_found(self):
         self.assertEqual(make_store().get_table_profile("missing")["error"], "table_not_found")
@@ -118,6 +119,14 @@ class AssetStoreTest(unittest.TestCase):
         self.assertEqual(store.get_table_profile("dwd_sms_bill")["expert_label"]["core_level"], "P0")
         self.assertTrue(store.is_core_table("dwd_sms_bill")["is_core"])
         self.assertEqual(store.list_expert_review_queue(layer="dwd")["results"], [])
+
+    def test_asset_value_profile_scores_new_tables(self):
+        value = make_risky_store().get_asset_value_profile("dwd_sms_bill")
+
+        self.assertEqual(value["value_tier"], "L2 重要公共资产")
+        self.assertEqual(value["core_level"], "P2")
+        self.assertFalse(value["is_core"])
+        self.assertEqual(value["dimensions"]["usage_heat"], 0)
 
 
 if __name__ == "__main__":
