@@ -63,6 +63,10 @@ TOOLS = {
         "description": "Return reusable asset value tier and core-table decision for a table.",
         "schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["table_name"]},
     },
+    "get_metric_definition": {
+        "description": "Explain metric definition for ads/dws tables from fields, lineage, and tasks.",
+        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["table_name"]},
+    },
     "list_quality_gaps": {
         "description": "List tables with downstream dependencies but no quality rules.",
         "schema": {"type": "object", "properties": {"layer": {"type": "string"}, "domain": {"type": "string"}, "limit": {"type": "integer"}}},
@@ -179,6 +183,11 @@ def _call_tool(store, request, live=None):
         if live and (args.get("live") or data.get("error")):
             live.sync_table(args["table_name"])
             data = store.get_asset_value_profile(args["table_name"])
+    elif name == "get_metric_definition":
+        data = store.get_metric_definition(args["table_name"])
+        if live and (args.get("live") or data.get("error") or not data.get("metric_fields")):
+            live.sync_table(args["table_name"])
+            data = store.get_metric_definition(args["table_name"])
     elif name == "list_quality_gaps":
         data = store.list_quality_gaps(args.get("layer", ""), args.get("domain", ""), args.get("limit", 50))
     elif name == "get_expert_label":
@@ -245,6 +254,8 @@ def _format_markdown(tool_name, data):
         )
     if tool_name == "get_asset_value_profile":
         return _format_asset_value_profile(data)
+    if tool_name == "get_metric_definition":
+        return _format_metric_definition(data)
     if tool_name == "list_quality_gaps":
         rows = data.get("results", [])
         return _section("质量监控缺口", [f"层级：`{_cell(data.get('layer'))}`", f"领域：`{_cell(data.get('domain'))}`", f"数量：{len(rows)}"]) + "\n\n" + _table(
@@ -357,6 +368,35 @@ def _format_asset_value_profile(data):
                 ["维度", "分数"],
                 [[key, value] for key, value in dimensions.items()],
             ),
+            _format_expert_label(data.get("expert_label")),
+        ]
+    )
+
+
+def _format_metric_definition(data):
+    table = data.get("table", {})
+    role = data.get("role", {})
+    return "\n\n".join(
+        [
+            _section(
+                f"指标口径：{table.get('name')}",
+                [
+                    f"层级：`{_cell(table.get('layer'))}`",
+                    f"口径角色：**{_cell(role.get('name'))}**",
+                    f"是否口径主表：**{role.get('primary_definition')}**",
+                    f"主题：`{_cell(data.get('subject'))}`",
+                    f"时间粒度：`{_cell(data.get('time_grain'))}`",
+                    f"说明：{_cell(data.get('explanation'))}",
+                ],
+            ),
+            _table(
+                ["字段名", "指标类型", "字段类型", "说明"],
+                [[r.get("name"), r.get("metric_type"), r.get("type"), r.get("description")] for r in data.get("metric_fields", [])],
+            ),
+            _section("上游 dws 口径表", []) + "\n\n" + _table(["表名", "经由"], [[r.get("upstream"), r.get("via")] for r in data.get("upstream_dws", [])]),
+            _section("上游来源表", []) + "\n\n" + _table(["表名", "经由"], [[r.get("upstream"), r.get("via")] for r in data.get("upstream_sources", [])]),
+            _section("下游 ads 指标结果表", []) + "\n\n" + _table(["表名", "经由"], [[r.get("downstream"), r.get("via")] for r in data.get("downstream_ads", [])]),
+            _section("相关任务", []) + "\n\n" + _table(["TaskId", "任务名", "方向", "状态"], [[t.get("id"), t.get("name"), t.get("direction"), t.get("status")] for t in data.get("tasks", [])]),
             _format_expert_label(data.get("expert_label")),
         ]
     )

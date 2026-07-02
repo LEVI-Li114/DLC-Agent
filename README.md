@@ -110,7 +110,7 @@ Update this section whenever a new MCP tool is added.
 - 项目管理：规划中。用于同步项目、项目成员、项目角色。
 - 资源组：规划中。用于同步资源组及资源组监控。
 - 数据开发：已部分支持。当前支持任务列表同步、任务搜索、任务产出表派生、任务输入输出映射。
-- 数据资产-数据字典：已部分支持。当前支持真实表资产、层级、字段、质量状态、资产价值分层、核心表判断。
+- 数据资产-数据字典：已部分支持。当前支持真实表资产、层级、字段、质量状态、资产价值分层、核心表判断、ads/dws 指标口径解释。
 - 运维中心：已部分支持。当前支持任务运行实例的开始时间、结束时间、耗时、状态。
 - 数据质量：已部分支持。当前支持真实质量规则同步、查询、表风险画像和质量监控缺口扫描；规则执行结果同步待接入。
 - 数据源管理：已支持。当前支持真实数据源列表、类型、负责人、描述、配置摘要、关联任务数和关联任务明细查询。
@@ -125,6 +125,7 @@ Update this section whenever a new MCP tool is added.
 | `list_table_columns(table_name, live)` | List fields for a table. | SQLite cache, live `GetTableColumns` fallback |
 | `get_quality_status(table_name, live)` | Show whether a table has quality monitoring, rule count, latest status, and rule details. | SQLite cache, live `ListQualityRules` fallback |
 | `get_asset_value_profile(table_name, live)` | Return reusable asset value tier and core-table decision for a table. | Local model over expert labels, metadata, lineage, quality rules, and task runs |
+| `get_metric_definition(table_name, live)` | Explain metric definition for ads/dws tables from metric fields, upstream/downstream lineage, and related tasks. | SQLite cache, live metadata fallback |
 | `get_table_risk_profile(table_name, live)` | Explain table risk level from layer, downstream dependencies, quality rules, and latest output task runs. | Local model over metadata, lineage, quality rules, and task runs |
 | `list_quality_gaps(layer, domain, limit)` | List tables with downstream dependencies but no quality rules. | Local model over metadata, lineage, and quality rules |
 | `get_expert_label(asset_type, asset_name)` | Return expert label for one table/metric/data source. | Imported expert labels |

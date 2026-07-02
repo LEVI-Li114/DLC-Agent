@@ -514,6 +514,33 @@ class AssetStore:
             "expert_label": None,
         }
 
+    def get_metric_definition(self, table_name):
+        table = self._one("select * from tables where name = ?", (table_name,))
+        if not table:
+            return {"error": "table_not_found", "table_name": table_name}
+        table = self._table_dict(table)
+        columns = [dict(row) for row in self._all("select name, type, description from columns where table_name = ? order by ordinal, name", (table_name,))]
+        lineage = self.get_table_lineage(table_name)
+        role = _metric_role(table)
+        metric_fields = []
+        for column in columns:
+            metric_field = _metric_field(column)
+            if metric_field:
+                metric_fields.append(metric_field)
+        return {
+            "table": table,
+            "role": role,
+            "subject": _metric_subject(table_name),
+            "time_grain": _metric_time_grain(table_name),
+            "metric_fields": metric_fields,
+            "upstream_dws": [row for row in lineage["upstream"] if self._is_layer_table(row["upstream"], "dws")],
+            "upstream_sources": [row for row in lineage["upstream"] if not self._is_layer_table(row["upstream"], "dws")],
+            "downstream_ads": [row for row in lineage["downstream"] if self._is_layer_table(row["downstream"], "ads")],
+            "tasks": self.get_table_tasks(table_name)["tasks"],
+            "explanation": _metric_explanation(role),
+            "expert_label": self._label_or_none("table", table_name),
+        }
+
     def get_table_risk_profile(self, table_name):
         profile = self.get_table_profile(table_name)
         if profile.get("error"):
@@ -677,6 +704,12 @@ class AssetStore:
         label = self.get_expert_label(asset_type, asset_name)
         return None if label.get("error") else label
 
+    def _is_layer_table(self, table_name, layer):
+        if table_name.lower().startswith(f"{layer}_"):
+            return True
+        row = self._one("select layer from tables where name = ?", (table_name,))
+        return bool(row and (row["layer"] or "").lower() == layer)
+
     def _latest_status(self, rules):
         failed = [rule for rule in rules if rule["last_status"] == "failed"]
         if failed:
@@ -754,6 +787,59 @@ def _asset_value_evidence(table, downstream_count, rule_count, failed_runs):
 def _has_business_keyword(name):
     keywords = {"bill", "cost", "amount", "consume", "revenue", "pay", "refund", "income", "order", "customer", "company"}
     return bool(keywords & set(name.split("_")))
+
+
+def _metric_role(table):
+    name = table["name"].lower()
+    layer = (table["layer"] or "").lower()
+    if layer == "dws" or name.startswith("dws_"):
+        return {"name": "指标统计口径层", "primary_definition": True}
+    if layer == "ads" or name.startswith("ads_"):
+        return {"name": "指标应用结果层", "primary_definition": False}
+    return {"name": "指标上游来源/非指标主表", "primary_definition": False}
+
+
+def _metric_subject(table_name):
+    tokens = [token for token in table_name.split("_") if token not in {"ads", "dws", "di", "df", "1d", "7d", "30d"}]
+    return "_".join(tokens) or table_name
+
+
+def _metric_time_grain(table_name):
+    tokens = set(table_name.lower().split("_"))
+    for grain in ("1h", "1d", "7d", "30d"):
+        if grain in tokens:
+            return grain
+    return "unknown"
+
+
+def _metric_field(column):
+    metric_type = _metric_field_type(column["name"])
+    if not metric_type:
+        return None
+    return {**column, "metric_type": metric_type}
+
+
+def _metric_field_type(name):
+    name = name.lower()
+    checks = [
+        ("金额类", ("amount", "amt", "cost", "fee", "price", "income", "revenue", "bill")),
+        ("数量类", ("num", "cnt", "count", "total", "times", "qty")),
+        ("比率类", ("rate", "ratio", "percent", "pct")),
+        ("时长/均值类", ("duration", "seconds", "minutes", "avg")),
+        ("状态/结果类", ("success", "fail", "status")),
+    ]
+    for label, keywords in checks:
+        if any(keyword in name for keyword in keywords):
+            return label
+    return ""
+
+
+def _metric_explanation(role):
+    if role["name"] == "指标统计口径层":
+        return "dws 表作为指标统计口径层，字段、上游来源和产出任务共同构成当前可解释口径。"
+    if role["name"] == "指标应用结果层":
+        return "ads 表作为业务使用的指标结果层，口径优先追溯上游 dws 表；本表更适合解释指标产出结果。"
+    return "该表不是 ads/dws 主指标表，可作为指标口径的上游来源参与解释。"
 
 
 def _value_tier_from_score(score):

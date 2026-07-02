@@ -22,6 +22,11 @@ def make_store():
     )
     store.upsert_column("ads_customer_revenue_daily", "customer_id", "string", "Customer ID", 1)
     store.upsert_column("ads_customer_revenue_daily", "revenue_amount", "decimal(18,2)", "Revenue", 2)
+    store.upsert_table({"name": "dws_customer_revenue_1d_di", "layer": "dws", "domain": "finance", "owner": "data-finance"})
+    store.upsert_column("dws_customer_revenue_1d_di", "customer_id", "string", "Customer ID", 1)
+    store.upsert_column("dws_customer_revenue_1d_di", "revenue_amount", "decimal(18,2)", "Revenue amount", 2)
+    store.upsert_column("dws_customer_revenue_1d_di", "pay_count", "bigint", "Pay count", 3)
+    store.upsert_lineage("dws_customer_revenue_1d_di", "ads_customer_revenue_daily", "task_ads_revenue_daily")
     store.upsert_lineage("ods_order", "ads_customer_revenue_daily", "task_revenue_daily")
     store.upsert_lineage("ads_customer_revenue_daily", "bi_finance_dashboard", "bi_report")
     store.upsert_quality_rule(
@@ -127,6 +132,17 @@ class AssetStoreTest(unittest.TestCase):
         self.assertEqual(value["core_level"], "P2")
         self.assertFalse(value["is_core"])
         self.assertEqual(value["dimensions"]["usage_heat"], 0)
+
+    def test_metric_definition_explains_ads_and_dws_roles(self):
+        store = make_store()
+
+        ads = store.get_metric_definition("ads_customer_revenue_daily")
+        dws = store.get_metric_definition("dws_customer_revenue_1d_di")
+
+        self.assertEqual(ads["role"]["name"], "指标应用结果层")
+        self.assertEqual(ads["upstream_dws"][0]["upstream"], "dws_customer_revenue_1d_di")
+        self.assertEqual(dws["role"]["name"], "指标统计口径层")
+        self.assertEqual([field["metric_type"] for field in dws["metric_fields"]], ["金额类", "数量类"])
 
 
 if __name__ == "__main__":

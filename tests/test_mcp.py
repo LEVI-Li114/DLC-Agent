@@ -21,6 +21,10 @@ class McpTest(unittest.TestCase):
             }
         )
         self.store.upsert_table({"name": "dwd_sms_bill", "layer": "dwd", "domain": "finance", "owner": "tencent"})
+        self.store.upsert_table({"name": "dws_customer_revenue_1d_di", "layer": "dws", "domain": "finance", "owner": "data-finance"})
+        self.store.upsert_table({"name": "ads_customer_revenue_daily", "layer": "ads", "domain": "finance", "owner": "data-finance"})
+        self.store.upsert_column("dws_customer_revenue_1d_di", "revenue_amount", "decimal(18,2)", "Revenue amount", 1)
+        self.store.upsert_lineage("dws_customer_revenue_1d_di", "ads_customer_revenue_daily", "task_ads_revenue")
         for index in range(5):
             self.store.upsert_lineage("dwd_sms_bill", f"dws_downstream_{index}", f"task_{index}")
         self.store.upsert_column("dim_customer", "customer_id", "string", "Customer ID", 1)
@@ -72,6 +76,7 @@ class McpTest(unittest.TestCase):
         self.assertIn("list_data_source_tasks", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("get_table_risk_profile", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("get_asset_value_profile", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("get_metric_definition", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("list_quality_gaps", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("get_expert_label", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("list_expert_review_queue", [tool["name"] for tool in response["result"]["tools"]])
@@ -216,6 +221,22 @@ class McpTest(unittest.TestCase):
         text = response["result"]["content"][0]["text"]
         self.assertIn("资产价值模型", text)
         self.assertIn("L2 重要公共资产", text)
+
+    def test_calls_metric_definition_tool(self):
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 17,
+                "method": "tools/call",
+                "params": {"name": "get_metric_definition", "arguments": {"table_name": "ads_customer_revenue_daily"}},
+            },
+        )
+
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("指标口径", text)
+        self.assertIn("指标应用结果层", text)
+        self.assertIn("dws_customer_revenue_1d_di", text)
 
     def test_calls_quality_gaps_tool(self):
         response = handle_request(
