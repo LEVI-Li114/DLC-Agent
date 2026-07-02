@@ -27,9 +27,17 @@ def main():
     task_snapshot = snapshot_from_api_dump(dump)
     table_names = sorted({table for task in task_snapshot["tasks"] for table in task.get("outputs", [])})
 
+    if os.environ.get("WEDATA_SYNC_TABLE_CATALOG", "1") == "1":
+        tables_response = _list_all(client, "ListTable", {}, page_size)
+        tables_path = os.path.join(work_dir, "wedata_tables.json")
+        with open(tables_path, "w", encoding="utf-8") as f:
+            json.dump(tables_response, f, ensure_ascii=False, indent=2)
+        dump["tables"] = tables_response
+        print(f"saved raw table catalog dump to {tables_path}")
+
     if os.environ.get("WEDATA_SYNC_METADATA") == "1":
         metadata_dump = _sync_metadata(client, project_id, table_names, page_size, work_dir)
-        dump.update(metadata_dump)
+        dump.update(_merge_metadata_dump(dump, metadata_dump))
 
     if os.environ.get("WEDATA_SYNC_DATA_SOURCES") == "1":
         data_sources_response = _list_all(client, "ListDataSources", {"ProjectId": project_id}, page_size)
@@ -94,6 +102,20 @@ def _list_all(client, action, payload, page_size, max_pages=None):
 def _pages_from_total(data, page_size):
     total = int(data.get("TotalCount") or 0)
     return (total + page_size - 1) // page_size if total else 0
+
+
+def _merge_metadata_dump(dump, metadata_dump):
+    if "tables" not in dump:
+        return metadata_dump
+    catalog_items = dump["tables"]["Response"]["Data"].get("Items") or []
+    detail_items = metadata_dump.get("tables", {}).get("Response", {}).get("Data", {}).get("Items") or []
+    by_name = {item.get("Name") or item.get("TableName"): item for item in catalog_items}
+    for item in detail_items:
+        name = item.get("Name") or item.get("TableName")
+        if name:
+            by_name[name] = {**by_name.get(name, {}), **item}
+    metadata_dump["tables"]["Response"]["Data"]["Items"] = list(by_name.values())
+    return metadata_dump
 
 
 def _instance_window():

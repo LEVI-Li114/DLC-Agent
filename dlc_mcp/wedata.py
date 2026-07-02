@@ -39,6 +39,7 @@ def import_wedata_snapshot(store, snapshot):
 def snapshot_from_api_dump(dump):
     tasks = [_task_from_api(item) for item in _items(dump.get("tasks", {}))]
     tables = [_table_from_api(item) for item in _items(dump.get("tables", {}))]
+    data_sources = [_data_source_from_api(item) for item in _items(dump.get("data_sources", {}))]
     existing_tables = {table["name"] for table in tables if table["name"]}
     for task in tasks:
         table_name = _derived_output_table(task["name"])
@@ -51,7 +52,7 @@ def snapshot_from_api_dump(dump):
         "tables": tables,
         "tasks": tasks,
         "task_instances": [_task_instance_from_api(item) for item in _items(dump.get("task_instances", {}))],
-        "data_sources": [_data_source_from_api(item) for item in _items(dump.get("data_sources", {}))],
+        "data_sources": data_sources + _builtin_data_sources(tables, data_sources),
         "lineage": [edge for edge in (_lineage_from_api(item) for item in _items(dump.get("lineage", {}))) if edge["upstream"] and edge["downstream"] and edge["upstream"] != edge["downstream"]],
         "quality_rules": [_quality_rule_from_api(item) for item in _items(dump.get("quality_rules", {}))],
     }
@@ -89,10 +90,12 @@ def _get(item, *names, default=""):
 def _table_from_api(item):
     name = _get(item, "TableName", "Name", "tableName", "name")
     metadata = item.get("TechnicalMetadata") or {}
+    data_source_id = _get(item, "DatasourceId", "DataSourceId", "DatasourceID", "DataSourceID", default="")
+    data_source_type = _get(item, "DatasourceType", "DataSourceType", default="")
     return {
         "name": name,
         "guid": _get(item, "Guid", "TableGuid", "TableId", "id"),
-        "data_source_id": str(_get(item, "DatasourceId", "DataSourceId", "DatasourceID", "DataSourceID", default="") or ""),
+        "data_source_id": str(data_source_id or data_source_type or ""),
         "database": _get(item, "DatabaseName", "Database", "DbName", "database"),
         "layer": _get(item, "Layer", "TableLayer", "layer", default=_layer_from_name(name)),
         "domain": _get(item, "Domain", "BizDomain", "domain", default=_domain_from_tokens(name.lower().split("_"))),
@@ -226,6 +229,12 @@ def _data_source_from_api(item):
         "description": _get(item, "Description", "Remark", "Comment", "description"),
         "config": config,
     }
+
+
+def _builtin_data_sources(tables, data_sources):
+    existing = {source["id"] for source in data_sources}
+    missing = sorted({table.get("data_source_id") for table in tables if table.get("data_source_id")} - existing)
+    return [{"id": source_id, "name": source_id, "type": source_id, "owner": "", "description": "WeData table catalog source", "config": {}} for source_id in missing]
 
 
 def _json_dict(value):

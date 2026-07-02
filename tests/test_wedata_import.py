@@ -255,6 +255,30 @@ class WeDataImportTest(unittest.TestCase):
         self.assertEqual(data_source["config"]["database"], "flow_boost")
         self.assertEqual(data_source["config"]["username"], "tech_support")
 
+    def test_maps_dlc_table_catalog_source(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "tables": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "Guid": "guid_1",
+                                    "Name": "dws_360_fin_job_seat_1d_di",
+                                    "DatabaseName": "byai_bigdata",
+                                    "DatasourceId": None,
+                                    "DatasourceType": "DLC",
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(snapshot["tables"][0]["data_source_id"], "DLC")
+        self.assertEqual(snapshot["data_sources"][0]["id"], "DLC")
+
     def test_maps_real_list_tasks_fields(self):
         snapshot = snapshot_from_api_dump(
             {
