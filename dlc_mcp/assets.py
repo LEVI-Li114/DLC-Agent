@@ -387,6 +387,68 @@ class AssetStore:
             "core": self.is_core_table(table_name),
         }
 
+    def get_table_risk_profile(self, table_name):
+        profile = self.get_table_profile(table_name)
+        if profile.get("error"):
+            return profile
+        table = profile["table"]
+        downstream_count = len(profile["lineage"]["downstream"])
+        rule_count = profile["quality"]["rule_count"]
+        latest_runs = self._latest_output_task_runs(table_name)
+        failed_runs = [run for run in latest_runs if _is_bad_run_status(run.get("status", ""))]
+        reasons = []
+        if table["layer"].lower() in {"ods", "dwd", "dws", "ads"}:
+            reasons.append(f"{table['layer']} layer")
+        if downstream_count >= 5:
+            reasons.append(f"{downstream_count} downstream assets")
+        if rule_count == 0:
+            reasons.append("missing quality rules")
+        if failed_runs:
+            reasons.append(f"{len(failed_runs)} latest task runs abnormal")
+
+        level = "低"
+        if failed_runs or (rule_count == 0 and downstream_count >= 5 and table["layer"].lower() in {"dwd", "dws", "ads"}):
+            level = "高"
+        elif rule_count == 0 or downstream_count:
+            level = "中"
+        return {
+            "table_name": table_name,
+            "risk_level": level,
+            "layer": table["layer"],
+            "downstream_count": downstream_count,
+            "quality_rule_count": rule_count,
+            "latest_runs": latest_runs,
+            "reasons": reasons,
+            "suggestions": _risk_suggestions(rule_count, downstream_count, failed_runs),
+        }
+
+    def list_quality_gaps(self, layer="", domain="", limit=50):
+        args = []
+        filters = ["coalesce(q.rule_count, 0) = 0", "coalesce(l.downstream_count, 0) > 0"]
+        if layer:
+            filters.append("t.layer = ?")
+            args.append(layer)
+        if domain:
+            filters.append("t.domain = ?")
+            args.append(domain)
+        args.append(limit)
+        rows = self._all(
+            f"""
+            select
+                t.name, t.layer, t.domain, t.owner,
+                coalesce(l.downstream_count, 0) as downstream_count,
+                coalesce(q.rule_count, 0) as quality_rule_count
+            from tables t
+            left join (select upstream, count(*) as downstream_count from lineage group by upstream) l on l.upstream = t.name
+            left join (select table_name, count(*) as rule_count from quality_rules group by table_name) q on q.table_name = t.name
+            where {" and ".join(filters)}
+            order by downstream_count desc, t.layer, t.name
+            limit ?
+            """,
+            tuple(args),
+        )
+        return {"layer": layer, "domain": domain, "results": [dict(row) for row in rows]}
+
     def list_table_columns(self, table_name):
         if not self._one("select 1 from tables where name = ?", (table_name,)):
             return {"error": "table_not_found", "table_name": table_name}
@@ -487,11 +549,42 @@ class AssetStore:
         )
         return row["n"] if row else 0
 
+    def _latest_output_task_runs(self, table_name):
+        rows = self._all(
+            """
+            select t.id as task_id, t.name as task_name, r.instance_date, r.start_time, r.end_time, r.duration_seconds, r.status
+            from task_tables tt
+            join tasks t on t.id = tt.task_id
+            left join task_runs r on r.task_id = t.id
+            where tt.table_name = ? and tt.direction = 'output'
+            order by r.instance_date desc, r.start_time desc
+            limit 5
+            """,
+            (table_name,),
+        )
+        return [dict(row) for row in rows if row["instance_date"]]
+
     def _latest_status(self, rules):
         failed = [rule for rule in rules if rule["last_status"] == "failed"]
         if failed:
             return "failed"
         return rules[0]["last_status"] if rules else "missing"
+
+
+def _is_bad_run_status(status):
+    value = (status or "").lower()
+    return value not in {"", "success", "succeed", "passed", "y", "y11", "completed"}
+
+
+def _risk_suggestions(rule_count, downstream_count, failed_runs):
+    suggestions = []
+    if rule_count == 0:
+        suggestions.append("补充分区产出、主键/非空、金额/数量合理性等质量规则")
+    if downstream_count >= 5:
+        suggestions.append("优先保障下游核心链路，确认依赖表 Owner 和告警接收人")
+    if failed_runs:
+        suggestions.append("检查最近产出任务失败或异常状态，并补充产出时效监控")
+    return suggestions
 
 
 def _owner_name(owner_id):

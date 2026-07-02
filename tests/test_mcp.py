@@ -20,6 +20,9 @@ class McpTest(unittest.TestCase):
                 "description": "Customer dimension",
             }
         )
+        self.store.upsert_table({"name": "dwd_sms_bill", "layer": "dwd", "domain": "finance", "owner": "tencent"})
+        for index in range(5):
+            self.store.upsert_lineage("dwd_sms_bill", f"dws_downstream_{index}", f"task_{index}")
         self.store.upsert_column("dim_customer", "customer_id", "string", "Customer ID", 1)
         self.store.upsert_task(
             {
@@ -66,6 +69,8 @@ class McpTest(unittest.TestCase):
         self.assertIn("search_tasks", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("list_data_sources", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("list_data_source_tasks", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("get_table_risk_profile", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("list_quality_gaps", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("list_metadata", [tool["name"] for tool in response["result"]["tools"]])
 
     def test_calls_table_profile_tool(self):
@@ -176,6 +181,34 @@ class McpTest(unittest.TestCase):
         )
 
         self.assertIn("dim_customer", response["result"]["content"][0]["text"])
+
+    def test_calls_table_risk_profile_tool(self):
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {"name": "get_table_risk_profile", "arguments": {"table_name": "dwd_sms_bill"}},
+            },
+        )
+
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("风险等级：**高**", text)
+        self.assertIn("missing quality rules", text)
+
+    def test_calls_quality_gaps_tool(self):
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 13,
+                "method": "tools/call",
+                "params": {"name": "list_quality_gaps", "arguments": {"layer": "dwd"}},
+            },
+        )
+
+        self.assertIn("dwd_sms_bill", response["result"]["content"][0]["text"])
 
     def test_live_fallback_search_tasks(self):
         live = FakeLive(self.store)

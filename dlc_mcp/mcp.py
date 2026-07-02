@@ -55,6 +55,14 @@ TOOLS = {
         "description": "List WeData tasks related to one data source.",
         "schema": {"type": "object", "properties": {"data_source_id": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["data_source_id"]},
     },
+    "get_table_risk_profile": {
+        "description": "Return table risk level based on lineage, quality rules, and latest output task runs.",
+        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["table_name"]},
+    },
+    "list_quality_gaps": {
+        "description": "List tables with downstream dependencies but no quality rules.",
+        "schema": {"type": "object", "properties": {"layer": {"type": "string"}, "domain": {"type": "string"}, "limit": {"type": "integer"}}},
+    },
     "list_metadata": {
         "description": "List imported databases and table metadata.",
         "schema": {"type": "object", "properties": {}},
@@ -149,6 +157,13 @@ def _call_tool(store, request, live=None):
         if live and (args.get("live") or not data.get("tasks")):
             live.sync_data_sources(args["data_source_id"])
             data = store.list_data_source_tasks(args["data_source_id"])
+    elif name == "get_table_risk_profile":
+        data = store.get_table_risk_profile(args["table_name"])
+        if live and (args.get("live") or data.get("error")):
+            live.sync_table(args["table_name"])
+            data = store.get_table_risk_profile(args["table_name"])
+    elif name == "list_quality_gaps":
+        data = store.list_quality_gaps(args.get("layer", ""), args.get("domain", ""), args.get("limit", 50))
     elif name == "list_metadata":
         data = store.list_metadata()
     else:
@@ -185,6 +200,32 @@ def _format_markdown(tool_name, data):
         return _section("数据源关联任务", [f"数据源ID：`{_cell(data.get('data_source_id'))}`", f"任务数：{len(rows)}"]) + "\n\n" + _table(
             ["TaskId", "任务名", "类型", "项目", "创建时间", "负责人"],
             [[r.get("task_id"), r.get("task_name"), r.get("task_type"), r.get("project_name"), r.get("create_time"), r.get("owner")] for r in rows],
+        )
+    if tool_name == "get_table_risk_profile":
+        return "\n\n".join(
+            [
+                _section(
+                    f"表风险画像：{data.get('table_name')}",
+                    [
+                        f"风险等级：**{_cell(data.get('risk_level'))}**",
+                        f"层级：`{_cell(data.get('layer'))}`",
+                        f"下游依赖数：**{data.get('downstream_count')}**",
+                        f"质量规则数：**{data.get('quality_rule_count')}**",
+                        f"原因：{', '.join(data.get('reasons') or [])}",
+                        f"建议：{'; '.join(data.get('suggestions') or [])}",
+                    ],
+                ),
+                _table(
+                    ["TaskId", "任务名", "实例日期", "开始时间", "结束时间", "耗时秒", "状态"],
+                    [[r.get("task_id"), r.get("task_name"), r.get("instance_date"), r.get("start_time"), r.get("end_time"), r.get("duration_seconds"), r.get("status")] for r in data.get("latest_runs", [])],
+                ),
+            ]
+        )
+    if tool_name == "list_quality_gaps":
+        rows = data.get("results", [])
+        return _section("质量监控缺口", [f"层级：`{_cell(data.get('layer'))}`", f"领域：`{_cell(data.get('domain'))}`", f"数量：{len(rows)}"]) + "\n\n" + _table(
+            ["表名", "层级", "领域", "负责人", "下游依赖数", "质量规则数"],
+            [[r.get("name"), r.get("layer"), r.get("domain"), r.get("owner"), r.get("downstream_count"), r.get("quality_rule_count")] for r in rows],
         )
     if tool_name == "search_tasks":
         rows = data.get("results", [])

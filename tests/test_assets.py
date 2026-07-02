@@ -46,6 +46,15 @@ def make_store():
     return store
 
 
+def make_risky_store():
+    store = make_store()
+    store.upsert_table({"name": "dwd_sms_bill", "layer": "dwd", "domain": "finance", "owner": "tencent"})
+    for index in range(5):
+        store.upsert_lineage("dwd_sms_bill", f"dws_downstream_{index}", f"task_{index}")
+    store.upsert_task({"id": "task_risk", "name": "dwd_sms_bill", "outputs": ["dwd_sms_bill"]})
+    return store
+
+
 class AssetStoreTest(unittest.TestCase):
     def test_table_profile_includes_columns_and_quality_summary(self):
         profile = make_store().get_table_profile("ads_customer_revenue_daily")
@@ -78,6 +87,19 @@ class AssetStoreTest(unittest.TestCase):
         store.replace_data_source_tasks("ds_001", [{"task_id": "sync_001", "task_name": "sync_mysql"}])
 
         self.assertEqual(store.get_data_source("ds_001")["task_count"], 1)
+
+    def test_table_risk_profile_flags_missing_quality_rules(self):
+        risk = make_risky_store().get_table_risk_profile("dwd_sms_bill")
+
+        self.assertEqual(risk["risk_level"], "高")
+        self.assertEqual(risk["downstream_count"], 5)
+        self.assertEqual(risk["quality_rule_count"], 0)
+        self.assertIn("missing quality rules", risk["reasons"])
+
+    def test_quality_gaps_find_tables_with_downstream_and_no_rules(self):
+        gaps = make_risky_store().list_quality_gaps(layer="dwd")
+
+        self.assertEqual(gaps["results"][0]["name"], "dwd_sms_bill")
 
 
 if __name__ == "__main__":
