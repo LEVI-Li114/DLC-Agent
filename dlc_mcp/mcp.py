@@ -91,6 +91,17 @@ TOOLS = {
         "description": "Return asset coverage by layer for tables, fields, lineage, quality rules, tasks, data sources, and runs.",
         "schema": {"type": "object", "properties": {}},
     },
+    "list_asset_coverage_gaps": {
+        "description": "List tables with missing asset profile coverage, filtered by gap type or layer.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "gap_type": {"type": "string"},
+                "layer": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+        },
+    },
     "is_core_table": {
         "description": "Decide whether a table is core and return explainable scoring reasons.",
         "schema": {"type": "object", "properties": {"table_name": {"type": "string"}}, "required": ["table_name"]},
@@ -208,6 +219,8 @@ def _call_tool(store, request, live=None):
         data = store.get_sync_health()
     elif name == "get_asset_coverage":
         data = store.get_asset_coverage()
+    elif name == "list_asset_coverage_gaps":
+        data = store.list_asset_coverage_gaps(args.get("gap_type", ""), args.get("layer", ""), args.get("limit", 50))
     else:
         data = store.is_core_table(args["table_name"])
 
@@ -355,6 +368,40 @@ def _format_markdown(tool_name, data):
                     ],
                 ),
                 _section("说明", data.get("coverage_notes") or []),
+            ]
+        )
+    if tool_name == "list_asset_coverage_gaps":
+        rows = data.get("results", [])
+        return "\n\n".join(
+            [
+                _section(
+                    "资产画像缺口清单",
+                    [
+                        f"缺口类型：`{_cell(data.get('gap_type'))}`",
+                        f"层级：`{_cell(data.get('layer'))}`",
+                        f"数量：{len(rows)}",
+                        f"支持类型：{', '.join(data.get('supported_gap_types') or [])}",
+                    ],
+                ),
+                _table(
+                    ["表名", "层级", "负责人", "字段", "质量规则", "上游", "下游", "任务", "运行实例", "数据源", "缺口"],
+                    [
+                        [
+                            r.get("name"),
+                            r.get("layer"),
+                            r.get("owner"),
+                            r.get("column_count"),
+                            r.get("quality_rule_count"),
+                            r.get("upstream_count"),
+                            r.get("downstream_count"),
+                            r.get("task_count"),
+                            r.get("run_count"),
+                            r.get("data_source_id"),
+                            "、".join(r.get("gaps") or []),
+                        ]
+                        for r in rows
+                    ],
+                ),
             ]
         )
     if tool_name == "is_core_table":

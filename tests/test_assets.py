@@ -175,6 +175,14 @@ class AssetStoreTest(unittest.TestCase):
         self.assertEqual(coverage["layers"][0]["tables_with_quality_rules"], 1)
         self.assertEqual(coverage["layers"][1]["layer"], "dws")
 
+    def test_asset_coverage_gaps_filter_by_type_and_layer(self):
+        gaps = make_store().list_asset_coverage_gaps(gap_type="quality", layer="dws", limit=10)
+
+        self.assertEqual(gaps["results"][0]["name"], "dws_customer_revenue_1d_di")
+        self.assertIn("quality", gaps["results"][0]["gap_keys"])
+        self.assertIn("缺质量规则", gaps["results"][0]["gaps"])
+        self.assertEqual(gaps["supported_gap_types"][0], "fields")
+
 
 if __name__ == "__main__":
     unittest.main()

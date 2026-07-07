@@ -72,6 +72,7 @@ Update this list whenever a new MCP tool is added.
 | `list_metadata()` | List imported databases and table metadata. |
 | `get_sync_health()` | Return sync health, asset counts, latest observed sync signals, and current data gaps. |
 | `get_asset_coverage()` | Return asset coverage by layer for fields, lineage, quality rules, tasks, data sources, and runs. |
+| `list_asset_coverage_gaps(gap_type, layer, limit)` | List tables with missing asset profile coverage, filtered by gap type or layer. |
 | `is_core_table(table_name)` | Explain whether a table is core and why. |
 
 ## Development

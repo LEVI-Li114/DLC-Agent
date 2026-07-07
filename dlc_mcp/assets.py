@@ -373,6 +373,66 @@ class AssetStore:
             ],
         }
 
+    def list_asset_coverage_gaps(self, gap_type="", layer="", limit=50):
+        args = []
+        layer_filter = ""
+        if layer:
+            layer_filter = "where t.layer = ?"
+            args.append(layer)
+        rows = self._all(
+            f"""
+            select
+                t.name, t.layer, t.domain, t.owner, t.data_source_id,
+                coalesce(c.column_count, 0) as column_count,
+                coalesce(q.rule_count, 0) as quality_rule_count,
+                coalesce(d.downstream_count, 0) as downstream_count,
+                coalesce(u.upstream_count, 0) as upstream_count,
+                coalesce(tt.task_count, 0) as task_count,
+                coalesce(r.run_count, 0) as run_count
+            from tables t
+            left join (select table_name, count(*) as column_count from columns group by table_name) c on c.table_name = t.name
+            left join (select table_name, count(*) as rule_count from quality_rules group by table_name) q on q.table_name = t.name
+            left join (select upstream, count(*) as downstream_count from lineage group by upstream) d on d.upstream = t.name
+            left join (select downstream, count(*) as upstream_count from lineage group by downstream) u on u.downstream = t.name
+            left join (select table_name, count(distinct task_id) as task_count from task_tables group by table_name) tt on tt.table_name = t.name
+            left join (
+                select tt.table_name, count(distinct r.instance_id) as run_count
+                from task_tables tt
+                join task_runs r on r.task_id = tt.task_id
+                where tt.direction = 'output'
+                group by tt.table_name
+            ) r on r.table_name = t.name
+            {layer_filter}
+            order by
+                case t.layer when 'ads' then 1 when 'dws' then 2 when 'dwd' then 3 when 'dim' then 4 when 'ods' then 5 else 9 end,
+                downstream_count desc,
+                task_count desc,
+                t.name
+            """,
+            tuple(args),
+        )
+        results = []
+        wanted = _normalize_gap_type(gap_type)
+        for row in rows:
+            item = dict(row)
+            gaps = _coverage_gaps(item)
+            if not gaps:
+                continue
+            if wanted and wanted not in gaps:
+                continue
+            item["gaps"] = [_gap_label(gap) for gap in gaps]
+            item["gap_keys"] = gaps
+            results.append(item)
+            if len(results) >= limit:
+                break
+        return {
+            "gap_type": gap_type,
+            "layer": layer,
+            "limit": limit,
+            "results": results,
+            "supported_gap_types": ["fields", "quality", "lineage", "upstream", "downstream", "tasks", "runs", "data_source"],
+        }
+
     def upsert_expert_label(self, item):
         self.conn.execute(
             """
@@ -1017,3 +1077,65 @@ def _owner_name(owner_id):
             key, value = item.split(":", 1)
             aliases[key.strip()] = value.strip()
     return aliases.get(str(owner_id), str(owner_id))
+
+
+def _normalize_gap_type(gap_type):
+    aliases = {
+        "field": "fields",
+        "fields": "fields",
+        "column": "fields",
+        "columns": "fields",
+        "quality": "quality",
+        "rule": "quality",
+        "rules": "quality",
+        "lineage": "lineage",
+        "upstream": "upstream",
+        "downstream": "downstream",
+        "task": "tasks",
+        "tasks": "tasks",
+        "run": "runs",
+        "runs": "runs",
+        "instance": "runs",
+        "instances": "runs",
+        "data_source": "data_source",
+        "datasource": "data_source",
+        "source": "data_source",
+    }
+    return aliases.get((gap_type or "").strip().lower(), "")
+
+
+def _coverage_gaps(row):
+    gaps = []
+    if int(row.get("column_count") or 0) == 0:
+        gaps.append("fields")
+    if int(row.get("quality_rule_count") or 0) == 0:
+        gaps.append("quality")
+    upstream = int(row.get("upstream_count") or 0)
+    downstream = int(row.get("downstream_count") or 0)
+    if upstream == 0:
+        gaps.append("upstream")
+    if downstream == 0:
+        gaps.append("downstream")
+    if upstream + downstream == 0:
+        gaps.append("lineage")
+    if int(row.get("task_count") or 0) == 0:
+        gaps.append("tasks")
+    if int(row.get("run_count") or 0) == 0:
+        gaps.append("runs")
+    if not row.get("data_source_id"):
+        gaps.append("data_source")
+    return gaps
+
+
+def _gap_label(gap):
+    labels = {
+        "fields": "缺字段信息",
+        "quality": "缺质量规则",
+        "upstream": "缺上游血缘",
+        "downstream": "缺下游血缘",
+        "lineage": "缺完整血缘",
+        "tasks": "缺相关任务",
+        "runs": "缺运行实例",
+        "data_source": "缺数据源关联",
+    }
+    return labels.get(gap, gap)

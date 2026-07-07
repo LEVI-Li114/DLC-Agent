@@ -83,6 +83,7 @@ class McpTest(unittest.TestCase):
         self.assertIn("list_metadata", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("get_sync_health", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("get_asset_coverage", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("list_asset_coverage_gaps", [tool["name"] for tool in response["result"]["tools"]])
 
     def test_calls_table_profile_tool(self):
         response = handle_request(
@@ -136,6 +137,22 @@ class McpTest(unittest.TestCase):
         self.assertIn("资产覆盖率", text)
         self.assertIn("| 层级 | 表数 | 有字段 | 有质量规则 |", text)
         self.assertIn("dwd", text)
+
+    def test_calls_asset_coverage_gaps_tool(self):
+        response = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 20,
+                "method": "tools/call",
+                "params": {"name": "list_asset_coverage_gaps", "arguments": {"gap_type": "quality", "layer": "dwd"}},
+            },
+        )
+
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("资产画像缺口清单", text)
+        self.assertIn("dwd_sms_bill", text)
+        self.assertIn("缺质量规则", text)
 
     def test_calls_search_tasks_tool(self):
         response = handle_request(
