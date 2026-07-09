@@ -112,6 +112,9 @@ def _list_all(client, action, payload, page_size, max_pages=None):
     stop_page = min(total_pages, max_pages or total_pages)
     for page in range(2, stop_page + 1):
         response = client.call(action, {**payload, "PageNumber": page, "PageSize": page_size})
+        if "Error" in response.get("Response", {}):
+            error = response["Response"]["Error"]
+            raise RuntimeError(f"{action} failed: {error.get('Code')} {error.get('Message')}")
         items.extend(response.get("Response", {}).get("Data", {}).get("Items") or [])
 
     first["Response"]["Data"]["Items"] = items

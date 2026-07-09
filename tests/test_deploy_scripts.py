@@ -24,6 +24,8 @@ class DeployScriptsTest(unittest.TestCase):
             "WEDATA_PAGE_SIZE",
             "WEDATA_SYNC_TABLE_CATALOG",
             "WEDATA_METADATA_WORKERS",
+            "WEDATA_FULL_FIELDS_REQUEST_INTERVAL",
+            "WEDATA_FULL_FIELDS_MAX_RETRIES",
             "WEDATA_SYNC_DATA_SOURCES",
             "WEDATA_SYNC_PARTITIONS",
             "WEDATA_PARTITION_ACTION",
@@ -51,6 +53,13 @@ class DeployScriptsTest(unittest.TestCase):
         self.assertIn("WEDATA_PARTITION_DATE", script)
         self.assertIn("WEDATA_INSTANCE_START", script)
         self.assertIn("deploy/sync-wedata-once.sh", script)
+
+    def test_full_field_sync_script_is_field_only_and_reports_elapsed_time(self):
+        script = (ROOT / "deploy" / "sync-all-table-fields.sh").read_text()
+
+        self.assertIn("dlc_mcp.sync_table_fields", script)
+        self.assertIn("elapsed_seconds", script)
+        self.assertNotIn("sync_wedata", script)
 
     def test_sync_script_runs_health_coverage_and_gap_checks(self):
         script = (ROOT / "deploy" / "sync-wedata-once.sh").read_text()

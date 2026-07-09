@@ -6,12 +6,19 @@ from io import StringIO
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from dlc_mcp.sync_wedata import _catalog_table_names, _filter_new_asset_tables, _instance_window, _metadata_table_count, _sync_data_source_tasks, _sync_metadata, _sync_partitions
+from dlc_mcp.sync_wedata import _catalog_table_names, _filter_new_asset_tables, _instance_window, _list_all, _metadata_table_count, _sync_data_source_tasks, _sync_metadata, _sync_partitions
 
 
 class FakeClient:
     def call(self, action, payload):
         return {"Response": {"Data": {"Items": [{"TaskId": payload["Id"]}]}}}
+
+
+class FakePagedErrorClient:
+    def call(self, action, payload):
+        if payload["PageNumber"] == 1:
+            return {"Response": {"Data": {"Items": [], "TotalPageNumber": 2}}}
+        return {"Response": {"Error": {"Code": "RequestLimitExceeded", "Message": "slow down"}}}
 
 
 class FakeMetadataClient:
@@ -62,6 +69,10 @@ class SyncWeDataTest(unittest.TestCase):
         self.assertEqual(sorted(related), ["1", "2"])
         self.assertIn("synced related tasks for 1/2 data sources", output.getvalue())
         self.assertIn("synced related tasks for 2/2 data sources", output.getvalue())
+
+    def test_list_all_raises_on_later_page_error(self):
+        with self.assertRaises(RuntimeError):
+            _list_all(FakePagedErrorClient(), "ListTable", {}, 100)
 
     def test_metadata_table_count_uses_detail_payload_not_catalog(self):
         metadata_dump = {"tables": {"Response": {"Data": {"Items": [{}, {}]}}}}

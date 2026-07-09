@@ -119,6 +119,22 @@ This uses:
 
 The metadata table limit keeps the sync small enough for manual runs. Increase it after the first run is stable.
 
+For a stable one-off full table field backfill, use the dedicated field-only script. It syncs table catalog and `GetTableColumns`, skips tables that already have columns unless forced, retries transient failures, writes a report with elapsed time, and avoids lineage/quality calls:
+
+```bash
+cd /opt/dlc-mcp/DLC-MCP
+bash deploy/sync-all-table-fields.sh /etc/dlc-mcp/env
+```
+
+Tune conservatively in `/etc/dlc-mcp/env` if Tencent Cloud rate limits are hit:
+
+```bash
+WEDATA_FULL_FIELDS_REQUEST_INTERVAL=0.3
+WEDATA_FULL_FIELDS_MAX_RETRIES=5
+WEDATA_FULL_FIELDS_RETRY_BASE_SLEEP=2
+WEDATA_FULL_FIELDS_PROGRESS_EVERY=50
+```
+
 ## 6. Optional: Sync Task Runs
 
 After `ListTaskInstances` works for your tenant, enable run-instance sync:
