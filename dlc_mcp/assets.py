@@ -505,12 +505,16 @@ class AssetStore:
         issues = []
         candidates = self._governance_issue_candidates(layer, core_level)
         for table in candidates:
-            issues.extend(_governance_issues_for_table(table))
-            if len(issues) >= limit and wanted:
+            table_issues = _governance_issues_for_table(table)
+            if wanted:
+                table_issues = [issue for issue in table_issues if issue["issue_type"] == wanted]
+            issues.extend(table_issues)
+            if len(issues) >= limit:
                 break
-        issues.extend(self._partition_unsupported_issues())
+        partition_issues = self._partition_unsupported_issues()
         if wanted:
-            issues = [issue for issue in issues if issue["issue_type"] == wanted]
+            partition_issues = [issue for issue in partition_issues if issue["issue_type"] == wanted]
+        issues.extend(partition_issues)
         issues = issues[:limit]
         return {
             "issue_type": issue_type,

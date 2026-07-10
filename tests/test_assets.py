@@ -520,6 +520,16 @@ class AssetGovernanceIssueInventoryTest(unittest.TestCase):
         self.assertEqual(data["results"], [])
         self.assertIn("missing_quality_rules", data["supported_issue_types"])
 
+    def test_issue_type_filter_applies_before_limit(self):
+        store = self._store()
+        store.upsert_table({"name": "a_no_task", "layer": "ads"})
+        store.upsert_table({"name": "z_no_run", "layer": "ads"})
+        store.upsert_task({"id": "task_1", "name": "build_z_no_run", "outputs": ["z_no_run"]})
+
+        data = store.get_asset_governance_issue_inventory(issue_type="missing_task_runs", limit=1)
+
+        self.assertEqual([item["asset_name"] for item in data["results"]], ["z_no_run"])
+
     def test_daily_report_includes_governance_issue_summaries(self):
         store = self._store()
         store.upsert_table({"name": "ads_revenue", "layer": "ads", "owner": "finance"})
