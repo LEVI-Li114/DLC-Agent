@@ -89,16 +89,17 @@ def _get(item, *names, default=""):
 
 
 def _table_from_api(item):
-    name = _get(item, "TableName", "Name", "tableName", "name")
+    name = _normalize_table_name(_get(item, "TableName", "Name", "tableName", "name"))
     metadata = item.get("TechnicalMetadata") or {}
     data_source_id = _get(item, "DatasourceId", "DataSourceId", "DatasourceID", "DataSourceID", default="")
     data_source_type = _get(item, "DatasourceType", "DataSourceType", default="")
+    database = _get(item, "DatabaseName", "Database", "DbName", "SchemaName", "database")
     return {
         "name": name,
         "guid": _get(item, "Guid", "TableGuid", "TableId", "id"),
         "data_source_id": str(data_source_id or data_source_type or ""),
-        "database": _get(item, "DatabaseName", "Database", "DbName", "database"),
-        "layer": _get(item, "Layer", "TableLayer", "layer", default=_layer_from_name(name)),
+        "database": database,
+        "layer": _table_layer(item, name, database),
         "domain": _get(item, "Domain", "BizDomain", "domain", default=_domain_from_tokens(name.lower().split("_"))),
         "owner": _get(item, "Owner", "OwnerName", "ResponsibleUser", "owner", default=metadata.get("Owner") or ""),
         "description": _get(item, "Description", "Comment", "description"),
@@ -253,7 +254,8 @@ def _normalize_table_name(name):
     value = str(name or "").strip().strip("`'\"")
     if not value:
         return ""
-    value = value.split(".")[-1]
+    value = value.replace("`.", ".").replace(".`", ".").replace("`", "")
+    value = value.split(".")[-1].strip().strip("`'\"")
     if value.startswith(("${", "$[")):
         return ""
     return value if _layer_from_name(value) or "_" in value else ""
@@ -352,12 +354,12 @@ def _lineage_from_api(item):
 
 def _quality_rule_from_api(item):
     return {
-        "table_name": _get(item, "TableName", "tableName"),
-        "rule_name": _get(item, "RuleName", "Name", "ruleName", default=str(_get(item, "RuleId", default=""))),
-        "rule_type": str(_get(item, "RuleType", "RuleTemplateContent", "Type", "ruleType")),
-        "target": _get(item, "Target", "ColumnName", "FieldName", "SourceObjectValue", "target"),
+        "table_name": _normalize_table_name(_get(item, "TableName", "DatasourceTableName", "Table", "tableName")),
+        "rule_name": _get(item, "RuleName", "Name", "RuleTemplateName", "ruleName", default=str(_get(item, "RuleId", default=""))),
+        "rule_type": str(_get(item, "RuleType", "RuleTemplateContent", "CompareRule", "Type", "ruleType")),
+        "target": _get(item, "Target", "ColumnName", "FieldName", "FieldConfig", "SourceObjectValue", "target"),
         "enabled": _get(item, "MonitorStatus", "Enabled", "IsEnabled", "enabled", default=True) not in (False, 0, "0", "false"),
-        "last_status": _get(item, "LastStatus", "Status", "DeployStatus", "lastStatus", default="configured"),
+        "last_status": _get(item, "LastStatus", "Status", "DeployStatus", "QualityDim", "lastStatus", default="configured"),
         "last_checked_at": _get(item, "LastCheckedAt", "CheckTime", "UpdateTime", "lastCheckedAt"),
     }
 
@@ -478,9 +480,32 @@ def _date_from_partition_name(name):
     return f"{value[:4]}-{value[4:6]}-{value[6:8]}" if len(value) == 8 else value
 
 
+def _table_layer(item, name, database):
+    explicit = _get(item, "Layer", "TableLayer", "BizLayer", "DataLayer", "layer")
+    for value in (
+        explicit,
+        database,
+        _get(item, "FolderName", "FolderPath", "CategoryName", "ProjectName"),
+        _get(item, "DatasourceName", "DataSourceName"),
+        name,
+    ):
+        layer = _layer_from_text(value)
+        if layer:
+            return layer
+    return ""
+
+
 def _layer_from_name(name):
-    prefix = (name or "").split("_", 1)[0].lower()
-    return prefix if prefix in {"ods", "dim", "dwd", "dws", "ads"} else ""
+    return _layer_from_text(name)
+
+
+def _layer_from_text(value):
+    text = str(value or "").lower().replace("-", "_").replace("/", "_").replace(".", "_")
+    parts = [part for part in text.split("_") if part]
+    for part in parts:
+        if part in {"ods", "dim", "dwd", "dws", "ads"}:
+            return part
+    return ""
 
 
 def _resource_table_name(resource):

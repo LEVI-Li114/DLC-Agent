@@ -561,6 +561,75 @@ class WeDataImportTest(unittest.TestCase):
         self.assertEqual(snapshot["task_instances"][0]["instance_id"], "inst_001")
         self.assertEqual(snapshot["task_instances"][0]["status"], "COMPLETED")
 
+    def test_infers_layer_from_database_path_and_layer_aliases(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "tables": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {"Name": "revenue_daily", "DatabaseName": "ads_mart"},
+                                {"Name": "seat_daily", "FolderPath": "/warehouse/dws/finance"},
+                                {"Name": "order_detail", "BizLayer": "dwd"},
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        self.assertEqual([table["layer"] for table in snapshot["tables"]], ["ads", "dws", "dwd"])
+
+    def test_normalizes_db_prefixed_task_tables(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "tasks": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "TaskId": "t1",
+                                    "TaskName": "build_ads_revenue",
+                                    "Inputs": "`ods_db`.`ods_order`",
+                                    "Outputs": "mart.ads_revenue",
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(snapshot["tasks"][0]["inputs"], ["ods_order"])
+        self.assertEqual(snapshot["tasks"][0]["outputs"], ["ads_revenue"])
+
+    def test_maps_quality_rule_table_and_field_aliases(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "quality_rules": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "DatasourceTableName": "mart.ads_revenue",
+                                    "RuleTemplateName": "amount_not_null",
+                                    "CompareRule": "not_null",
+                                    "FieldConfig": "amount",
+                                    "QualityDim": "passed",
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        rule = snapshot["quality_rules"][0]
+        self.assertEqual(rule["table_name"], "ads_revenue")
+        self.assertEqual(rule["rule_name"], "amount_not_null")
+        self.assertEqual(rule["rule_type"], "not_null")
+        self.assertEqual(rule["target"], "amount")
+
 
 if __name__ == "__main__":
     unittest.main()
