@@ -47,14 +47,6 @@ def snapshot_from_api_dump(dump):
     tasks = [_task_from_api(item) for item in _items(dump.get("tasks", {}))]
     tables = [_table_from_api(item) for item in _items(dump.get("tables", {}))]
     data_sources = [_data_source_from_api(item) for item in _items(dump.get("data_sources", {}))]
-    existing_tables = {table["name"] for table in tables if table["name"]}
-    for task in tasks:
-        table_name = _derived_output_table(task["name"])
-        if table_name and not task["outputs"]:
-            task["outputs"] = [table_name]
-        if table_name and table_name not in existing_tables:
-            tables.append(_table_from_task(task, table_name))
-            existing_tables.add(table_name)
     return {
         "tables": tables,
         "tasks": tasks,
@@ -335,30 +327,6 @@ def _strip_sql_comments(sql):
 
 def _is_sql_keyword_name(name):
     return name.lower() in {"select", "where", "lateral", "values", "unnest"}
-
-
-def _derived_output_table(task_name):
-    name = (task_name or "").strip()
-    for prefix in ("build_", "etl_", "sync_"):
-        if name.startswith(prefix):
-            name = name[len(prefix):]
-    if name.endswith(("_check", "_kafka", "_back", "_bak", "_tmp", "_test")):
-        return ""
-    if name.split("_", 1)[0] in {"ods", "dim", "dwd", "dws", "ads"}:
-        return name
-    return ""
-
-
-def _table_from_task(task, table_name):
-    tokens = table_name.lower().split("_")
-    return {
-        "name": table_name,
-        "database": "",
-        "layer": tokens[0],
-        "domain": _domain_from_tokens(tokens),
-        "owner": task.get("owner", ""),
-        "description": f"Derived from WeData task {task.get('name', '')}",
-    }
 
 
 def _domain_from_tokens(tokens):

@@ -349,6 +349,25 @@ class WeDataImportTest(unittest.TestCase):
         self.assertEqual(related["data_source_id"], "67186")
         self.assertEqual(related["tasks"][0]["task_name"], "c2f_ads_call_company_yizhifu_1d_di")
 
+    def test_import_keeps_data_source_only_tasks_on_data_source_dimension(self):
+        store = AssetStore(sqlite3.connect(":memory:"))
+        store.init_schema()
+        import_wedata_snapshot(
+            store,
+            {
+                "data_sources": [{"id": "ds_001", "name": "mysql_prod"}],
+                "data_source_tasks": [
+                    {
+                        "data_source_id": "ds_001",
+                        "tasks": [{"task_id": "sync_001", "task_name": "sync_mysql_prod"}],
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(store.search_tasks("sync_mysql_prod")["results"], [])
+        self.assertEqual(store.list_data_source_tasks("ds_001")["tasks"][0]["task_name"], "sync_mysql_prod")
+
     def test_maps_real_list_tasks_fields(self):
         snapshot = snapshot_from_api_dump(
             {
@@ -419,7 +438,7 @@ class WeDataImportTest(unittest.TestCase):
         self.assertEqual(snapshot["tasks"][0]["inputs"], ["dwd_bill_company_di", "dim_company"])
         self.assertEqual(snapshot["tasks"][0]["outputs"], ["ads_bill_company_1d_di"])
 
-    def test_derives_table_asset_from_layer_named_task(self):
+    def test_layer_named_task_does_not_create_table_asset(self):
         snapshot = snapshot_from_api_dump(
             {
                 "tasks": {
@@ -445,11 +464,9 @@ class WeDataImportTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(snapshot["tasks"][0]["outputs"], ["ads_bill_company_1d_di"])
+        self.assertEqual(snapshot["tasks"][0]["outputs"], [])
         self.assertEqual(snapshot["tasks"][1]["outputs"], [])
-        self.assertEqual(snapshot["tables"][0]["name"], "ads_bill_company_1d_di")
-        self.assertEqual(snapshot["tables"][0]["layer"], "ads")
-        self.assertEqual(snapshot["tables"][0]["domain"], "finance")
+        self.assertEqual(snapshot["tables"], [])
 
     def test_maps_task_table_names_from_sql_when_structured_fields_missing(self):
         snapshot = snapshot_from_api_dump(
