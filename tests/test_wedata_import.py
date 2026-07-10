@@ -2,6 +2,7 @@ import sqlite3
 import unittest
 
 from dlc_mcp.assets import AssetStore
+from dlc_mcp.cleanup_derived_tables import cleanup_derived_tables
 from dlc_mcp.wedata import import_wedata_snapshot, snapshot_from_api_dump
 
 
@@ -367,6 +368,21 @@ class WeDataImportTest(unittest.TestCase):
 
         self.assertEqual(store.search_tasks("sync_mysql_prod")["results"], [])
         self.assertEqual(store.list_data_source_tasks("ds_001")["tasks"][0]["task_name"], "sync_mysql_prod")
+
+    def test_cleanup_removes_old_task_name_derived_tables(self):
+        store = AssetStore(sqlite3.connect(":memory:"))
+        store.init_schema()
+        store.upsert_table({"name": "ads_fake", "description": "Derived from WeData task ads_fake"})
+        store.upsert_task({"id": "task_1", "name": "ads_fake", "outputs": ["ads_fake"]})
+        store.upsert_lineage("ods_real", "ads_fake", "ads_fake")
+
+        dry_run = cleanup_derived_tables(store.conn)
+        applied = cleanup_derived_tables(store.conn, apply=True)
+
+        self.assertEqual(dry_run["candidate_tables"], 1)
+        self.assertEqual(applied["deleted_tables"], 1)
+        self.assertEqual(store.get_table_profile("ads_fake")["error"], "table_not_found")
+        self.assertEqual(store.get_task("task_1")["outputs"], [])
 
     def test_maps_real_list_tasks_fields(self):
         snapshot = snapshot_from_api_dump(
