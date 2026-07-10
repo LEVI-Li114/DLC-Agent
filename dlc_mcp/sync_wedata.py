@@ -175,6 +175,24 @@ def _sync_partitions(client, project_id, table_names, page_size, progress_every=
     return {"Response": {"Data": {"Items": items}}}
 
 
+def partition_payload_candidates(project_id, table):
+    name = table.get("Name") or table.get("TableName") or table.get("name") or table.get("tableName") or ""
+    guid = table.get("Guid") or table.get("TableGuid") or table.get("TableId") or ""
+    database = table.get("DatabaseName") or table.get("Database") or table.get("DbName") or table.get("SchemaName") or ""
+    data_source_id = table.get("DatasourceId") or table.get("DataSourceId") or table.get("DatasourceID") or table.get("DataSourceID") or ""
+    base = {"ProjectId": project_id}
+    payloads = []
+    if name:
+        payloads.append({**base, "TableName": name})
+    if guid:
+        payloads.append({**base, "TableGuid": guid})
+    if database and name:
+        payloads.append({**base, "DatabaseName": database, "TableName": name})
+    if data_source_id and database and name:
+        payloads.append({**base, "DataSourceId": str(data_source_id), "DatabaseName": database, "TableName": name})
+    return payloads
+
+
 def _response_item_count(response):
     return len(response.get("Response", {}).get("Data", {}).get("Items") or [])
 
