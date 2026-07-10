@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from .assets import AssetStore
 from .tencentcloud import TencentCloudClient
-from .wedata import import_wedata_snapshot, snapshot_from_api_dump
+from .wedata import _dedupe_table_names, _items, _normalize_table_name, _task_table_names, import_wedata_snapshot, snapshot_from_api_dump
 
 
 def main():
@@ -176,13 +176,137 @@ def _sync_related_task_definitions(client, project_id, related_tasks, page_size,
         response = _list_all(client, "ListTasks", {"ProjectId": project_id, "TaskName": task_name}, page_size)
         for item in response.get("Response", {}).get("Data", {}).get("Items") or []:
             if _task_matches_related_item(item, task):
-                definitions.append(item)
+                definitions.append(_enrich_related_task_definition(client, project_id, item, task, page_size))
                 if task_id:
                     seen_task_ids.add(task_id)
                 break
         if progress_every and (index == total or index % progress_every == 0):
             print(f"synced definitions for {index}/{total} data source related tasks", flush=True)
     return {"Response": {"Data": {"Items": definitions}}}
+
+
+def _enrich_related_task_definition(client, project_id, item, related, page_size):
+    enriched = dict(item)
+    outputs = _task_table_names(enriched, "output")
+    inputs = _task_table_names(enriched, "input")
+    if not outputs:
+        inputs, outputs = _task_lineage_tables(client, project_id, related, page_size)
+    if not outputs:
+        detail = _task_detail(client, project_id, related)
+        if detail:
+            enriched.update({k: v for k, v in detail.items() if v not in ("", None, [], {})})
+            outputs = _task_table_names(enriched, "output")
+            inputs = inputs or _task_table_names(enriched, "input")
+    if inputs:
+        enriched["InputTables"] = _merged_table_list(enriched.get("InputTables"), inputs)
+    if outputs:
+        enriched["OutputTables"] = _merged_table_list(enriched.get("OutputTables"), outputs)
+    return enriched
+
+
+def _merged_table_list(existing, extra):
+    current = existing if isinstance(existing, list) else []
+    return _dedupe_table_names([*current, *extra])
+
+
+def _task_lineage_tables(client, project_id, related, page_size):
+    task_id = str(related.get("task_id") or "")
+    if not task_id:
+        return [], []
+    payload = {"ProcessId": task_id, "ProcessType": "SCHEDULE_TASK", "Platform": "WEDATA"}
+    try:
+        response = _list_all(client, "ListProcessLineage", payload, page_size)
+    except Exception:
+        return [], []
+    inputs = []
+    outputs = []
+    for item in _items(response):
+        inputs.extend(_lineage_endpoint_table_names(item.get("Source") or item.get("Sources") or item.get("source")))
+        outputs.extend(_lineage_endpoint_table_names(item.get("Target") or item.get("Targets") or item.get("target")))
+        resource = item.get("Resource") or {}
+        if resource:
+            outputs.extend(_lineage_endpoint_table_names(resource))
+    return _dedupe_table_names(inputs), _dedupe_table_names(outputs)
+
+
+def _lineage_endpoint_table_names(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        names = []
+        for item in value:
+            names.extend(_lineage_endpoint_table_names(item))
+        return names
+    if isinstance(value, dict):
+        names = []
+        property_name = _lineage_resource_property(value, "TableName")
+        if property_name:
+            name = _normalize_table_name(property_name)
+            if name:
+                names.append(name)
+        for field in ("ResourceName", "TableName", "Name", "TargetTable", "SourceTable", "DatabaseTable", "DbTableName"):
+            if field == "ResourceName" and str(value.get("ResourceType") or "").upper() == "COLUMN":
+                continue
+            if value.get(field):
+                name = _normalize_table_name(value[field])
+                if name:
+                    names.append(name)
+        for field in ("Resource", "Resources", "Items", "List"):
+            if field in value:
+                names.extend(_lineage_endpoint_table_names(value[field]))
+        return names
+    name = _normalize_table_name(value)
+    return [name] if name else []
+
+
+def _lineage_resource_property(value, name):
+    for item in value.get("ResourceProperties") or []:
+        if item.get("Name") == name:
+            return item.get("Value") or ""
+    return ""
+
+
+def _task_detail(client, project_id, related):
+    task_id = str(related.get("task_id") or "")
+    task_name = related.get("task_name") or ""
+    for action in ("GetTask", "GetTaskCode"):
+        payload = {"ProjectId": project_id}
+        if task_id:
+            payload["TaskId"] = task_id
+        if task_name:
+            payload["TaskName"] = task_name
+        try:
+            response = client.call(action, payload)
+        except Exception:
+            continue
+        error = response.get("Response", {}).get("Error")
+        if error:
+            continue
+        detail = _first_detail_item(response)
+        if detail:
+            return detail
+    return {}
+
+
+def _first_detail_item(response):
+    items = _items(response)
+    if items:
+        return items[0]
+    data = response.get("Response", response)
+    if isinstance(data, dict):
+        data = data.get("Data", data)
+    if not isinstance(data, dict):
+        return {}
+    result = dict(data)
+    config = result.get("TaskConfiguration") or result.get("Configuration") or {}
+    if isinstance(config, str):
+        try:
+            config = json.loads(config)
+        except json.JSONDecodeError:
+            config = {}
+    if isinstance(config, dict):
+        result.update({k: v for k, v in config.items() if k not in result})
+    return result
 
 
 def _flatten_related_tasks(related_tasks):

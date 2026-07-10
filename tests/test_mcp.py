@@ -46,7 +46,32 @@ class FakeWeDataClient:
                             {
                                 "TaskId": "20250808124139850",
                                 "TaskName": "m2c_ods_cloud_cost_aliyun_day_di",
-                                "Sql": "insert overwrite table ods_cloud_cost_aliyun_day_di select * from raw_bill",
+                            }
+                        ],
+                        "TotalPageNumber": 1,
+                    }
+                }
+            }
+        if action == "ListProcessLineage":
+            return {
+                "Response": {
+                    "Data": {
+                        "Items": [
+                            {
+                                "Source": [
+                                    {
+                                        "ResourceName": "crm_fxiaoke.cloud_cost_aliyun_day.billing_date",
+                                        "ResourceType": "COLUMN",
+                                        "ResourceProperties": [{"Name": "TableName", "Value": "cloud_cost_aliyun_day"}],
+                                    }
+                                ],
+                                "Target": [
+                                    {
+                                        "ResourceName": "byai_bigdata.ods_cloud_cost_aliyun_day_di.billing_date",
+                                        "ResourceType": "COLUMN",
+                                        "ResourceProperties": [{"Name": "TableName", "Value": "ods_cloud_cost_aliyun_day_di"}],
+                                    }
+                                ],
                             }
                         ],
                         "TotalPageNumber": 1,
@@ -650,6 +675,7 @@ class McpTest(unittest.TestCase):
         self.assertIn("ods_cloud_cost_aliyun_day_di", text)
         self.assertNotIn("| m2c_ods_cloud_cost_aliyun_day_di | 缺字段 |", text)
         self.assertTrue(any(call[0] == "ListTasks" and call[1].get("TaskName") == "m2c_ods_cloud_cost_aliyun_day_di" for call in client.calls))
+        self.assertTrue(any(call[0] == "ListProcessLineage" and call[1].get("ProcessId") == "20250808124139850" for call in client.calls))
 
     def test_tools_list_includes_governance_issue_inventory(self):
         store = AssetStore(sqlite3.connect(":memory:"))
