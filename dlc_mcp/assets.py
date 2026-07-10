@@ -3,6 +3,18 @@ import json
 import os
 
 
+GOVERNANCE_ISSUE_TYPES = [
+    "unknown_layer",
+    "missing_quality_rules",
+    "missing_task_mapping",
+    "missing_task_runs",
+    "missing_data_source",
+    "missing_owner",
+    "partition_unsupported",
+    "profile_incomplete",
+]
+
+
 class AssetStore:
     def __init__(self, conn):
         self.conn = conn
@@ -477,6 +489,92 @@ class AssetStore:
             "results": results,
             "supported_gap_types": ["fields", "quality", "lineage", "upstream", "downstream", "tasks", "runs", "data_source"],
         }
+
+    def get_asset_governance_issue_inventory(self, layer="", core_level="", issue_type="", limit=100):
+        wanted = issue_type or ""
+        if wanted and wanted not in GOVERNANCE_ISSUE_TYPES:
+            return {
+                "issue_type": issue_type,
+                "layer": layer,
+                "core_level": core_level,
+                "limit": limit,
+                "supported_issue_types": GOVERNANCE_ISSUE_TYPES,
+                "results": [],
+                "notes": ["unsupported issue_type; use one of supported_issue_types"],
+            }
+        issues = []
+        candidates = self._governance_issue_candidates(layer, core_level)
+        for table in candidates:
+            issues.extend(_governance_issues_for_table(table))
+            if len(issues) >= limit and wanted:
+                break
+        issues.extend(self._partition_unsupported_issues())
+        if wanted:
+            issues = [issue for issue in issues if issue["issue_type"] == wanted]
+        issues = issues[:limit]
+        return {
+            "issue_type": issue_type,
+            "layer": layer,
+            "core_level": core_level,
+            "limit": limit,
+            "supported_issue_types": GOVERNANCE_ISSUE_TYPES,
+            "results": issues,
+            "notes": [
+                "Issue inventory is derived from current SQLite facts and does not call external APIs.",
+                "Missing facts are reported as governance gaps, not hidden as healthy states.",
+            ],
+        }
+
+    def _governance_issue_candidates(self, layer="", core_level=""):
+        filters = []
+        args = []
+        if layer:
+            filters.append("coalesce(nullif(t.layer, ''), 'unknown') = ?")
+            args.append(layer)
+        if core_level:
+            filters.append("coalesce(el.core_level, '') = ?")
+            args.append(core_level)
+        where = "where " + " and ".join(filters) if filters else ""
+        return [
+            dict(row)
+            for row in self._all(
+                f"""
+                select
+                    t.name,
+                    coalesce(nullif(t.layer, ''), 'unknown') as layer,
+                    t.owner,
+                    t.data_source_id,
+                    coalesce(el.core_level, '') as core_level,
+                    coalesce(c.column_count, 0) as column_count,
+                    coalesce(q.rule_count, 0) as quality_rule_count,
+                    coalesce(d.downstream_count, 0) as downstream_count,
+                    coalesce(tt.task_count, 0) as task_count,
+                    coalesce(r.run_count, 0) as run_count
+                from tables t
+                left join expert_labels el on el.asset_type = 'table' and el.asset_name = t.name
+                left join (select table_name, count(*) as column_count from columns group by table_name) c on c.table_name = t.name
+                left join (select table_name, count(*) as rule_count from quality_rules group by table_name) q on q.table_name = t.name
+                left join (select upstream, count(*) as downstream_count from lineage group by upstream) d on d.upstream = t.name
+                left join (select table_name, count(distinct task_id) as task_count from task_tables group by table_name) tt on tt.table_name = t.name
+                left join (
+                    select tt.table_name, count(distinct r.instance_id) as run_count
+                    from task_tables tt
+                    join task_runs r on r.task_id = tt.task_id
+                    where tt.direction = 'output'
+                    group by tt.table_name
+                ) r on r.table_name = t.name
+                {where}
+                order by
+                    case coalesce(el.core_level, '') when 'P0' then 1 when 'P1' then 2 when 'P2' then 3 else 9 end,
+                    downstream_count desc,
+                    t.name
+                """,
+                tuple(args),
+            )
+        ]
+
+    def _partition_unsupported_issues(self):
+        return []
 
     def get_asset_governance_daily_report(self, instance_date="", layer="", core_level=""):
         sync_health = self.get_sync_health()
@@ -1907,6 +2005,66 @@ def _governance_status_counts(production_risks):
         status = item.get("status", "unknown")
         counts[status] = counts.get(status, 0) + 1
     return counts
+
+
+def _governance_issues_for_table(table):
+    issues = []
+    if table.get("layer") in ("", "unknown"):
+        issues.append(_governance_issue(table, "unknown_layer", "manual_mapping_needed", "Inspect raw ListTable fields and table naming rules for layer inference."))
+    if int(table.get("quality_rule_count") or 0) == 0:
+        issues.append(_governance_issue(table, "missing_quality_rules", "source_governance_gap", "Compare raw quality rules with DB rules for this table."))
+    if int(table.get("task_count") or 0) == 0:
+        issues.append(_governance_issue(table, "missing_task_mapping", "parser_gap", "Check raw task inputs/outputs and SQL table-name normalization."))
+    elif int(table.get("run_count") or 0) == 0:
+        issues.append(_governance_issue(table, "missing_task_runs", "instance_window_gap", "Check ListTaskInstances time window, max pages, and task_id alignment."))
+    if not table.get("data_source_id"):
+        issues.append(_governance_issue(table, "missing_data_source", "source_metadata_gap", "Check ListTable data source fields and data source sync coverage."))
+    if not table.get("owner"):
+        issues.append(_governance_issue(table, "missing_owner", "owner_governance_gap", "Ask table owner or warehouse owner to confirm responsibility."))
+    if _profile_incomplete(table):
+        issues.append(_governance_issue(table, "profile_incomplete", "profile_coverage_gap", "Prioritize missing profile facts by issue inventory entries."))
+    return issues
+
+
+def _governance_issue(table, issue_type, root_cause, next_check):
+    evidence = {
+        "layer": table.get("layer", ""),
+        "core_level": table.get("core_level", ""),
+        "column_count": int(table.get("column_count") or 0),
+        "quality_rule_count": int(table.get("quality_rule_count") or 0),
+        "downstream_count": int(table.get("downstream_count") or 0),
+        "task_count": int(table.get("task_count") or 0),
+        "run_count": int(table.get("run_count") or 0),
+        "data_source_id": table.get("data_source_id", ""),
+    }
+    return {
+        "issue_type": issue_type,
+        "asset_type": "table",
+        "asset_name": table.get("name", ""),
+        "layer": table.get("layer", ""),
+        "owner": table.get("owner") or "unknown owner",
+        "severity": _governance_issue_severity(table, issue_type),
+        "evidence": evidence,
+        "suspected_root_cause": root_cause,
+        "recommended_next_check": next_check,
+    }
+
+
+def _governance_issue_severity(table, issue_type):
+    if table.get("core_level") in {"P0", "P1"}:
+        return "P0"
+    if issue_type in {"missing_task_runs", "missing_task_mapping"} and table.get("layer") in {"ads", "dws", "dwd"}:
+        return "P1"
+    if int(table.get("downstream_count") or 0) >= 1:
+        return "P1"
+    return "P2"
+
+
+def _profile_incomplete(table):
+    return any(
+        int(table.get(key) or 0) == 0
+        for key in ("column_count", "quality_rule_count", "task_count")
+    ) or not table.get("data_source_id") or not table.get("owner") or table.get("layer") in {"", "unknown"}
 
 
 def _governance_owner_gap_item(table, owner_profile):
