@@ -416,6 +416,31 @@ class WeDataImportTest(unittest.TestCase):
         self.assertEqual(store.search_assets("m2c_ods_crm_payment_plan_df")["results"][0]["data_source_id"], "ds_001")
         self.assertEqual(store.get_data_source_inventory(data_source_name="crm_fxiaoke_tx")["tasks"][0]["parse_status"], "已解析")
         self.assertEqual(store.get_data_source_inventory(data_source_name="crm_fxiaoke_tx")["tables"][0]["parse_status"], "缺字段")
+        edges = [dict(row) for row in store._all("select source_type, source_id, target_type, target_id, relation_type, evidence_source, confidence from asset_edges order by relation_type")]
+        self.assertIn(
+            {
+                "source_type": "data_source",
+                "source_id": "ds_001",
+                "target_type": "task",
+                "target_id": "sync_001",
+                "relation_type": "has_related_task",
+                "evidence_source": "wedata_get_data_source_related_tasks",
+                "confidence": "high",
+            },
+            edges,
+        )
+        self.assertIn(
+            {
+                "source_type": "data_source",
+                "source_id": "ds_001",
+                "target_type": "table",
+                "target_id": "m2c_ods_crm_payment_plan_df",
+                "relation_type": "inferred_output_table",
+                "evidence_source": "data_source_related_task_name",
+                "confidence": "medium",
+            },
+            edges,
+        )
 
     def test_cleanup_removes_old_task_name_derived_tables(self):
         store = AssetStore(sqlite3.connect(":memory:"))

@@ -49,6 +49,17 @@ class AssetStore:
                 via text not null default '',
                 primary key (upstream, downstream, via)
             );
+            create table if not exists asset_edges (
+                source_type text not null,
+                source_id text not null,
+                target_type text not null,
+                target_id text not null,
+                relation_type text not null,
+                evidence_source text not null default '',
+                confidence text not null default '',
+                evidence_json text not null default '{}',
+                primary key (source_type, source_id, target_type, target_id, relation_type, evidence_source)
+            );
             create table if not exists quality_rules (
                 table_name text not null,
                 rule_name text not null,
@@ -131,6 +142,8 @@ class AssetStore:
             );
             """
         )
+        self.conn.execute("create index if not exists idx_asset_edges_target on asset_edges (target_type, target_id)")
+        self.conn.execute("create index if not exists idx_asset_edges_relation on asset_edges (relation_type, evidence_source, confidence)")
         self._add_column_if_missing("tables", "source_guid", "text not null default ''")
         self._add_column_if_missing("tables", "data_source_id", "text not null default ''")
         self._add_column_if_missing("tasks", "schedule_time", "text not null default ''")
@@ -164,6 +177,18 @@ class AssetStore:
                 item.get("manual_core_level"),
             ),
         )
+        if item.get("data_source_id"):
+            self.upsert_asset_edge(
+                "data_source",
+                item.get("data_source_id", ""),
+                "table",
+                item["name"],
+                "contains_table",
+                "wedata_list_table",
+                "high",
+                {"database": item.get("database", ""), "guid": item.get("guid", "")},
+                commit=False,
+            )
         self.conn.commit()
 
     def upsert_column(self, table_name, name, column_type="", description="", ordinal=0):
@@ -180,12 +205,49 @@ class AssetStore:
         )
         self.conn.commit()
 
-    def upsert_lineage(self, upstream, downstream, via=""):
+    def upsert_lineage(self, upstream, downstream, via="", evidence_source="wedata_list_lineage", confidence="high"):
         self.conn.execute(
             "insert or replace into lineage (upstream, downstream, via) values (?, ?, ?)",
             (upstream, downstream, via),
         )
+        self.upsert_asset_edge(
+            "table",
+            upstream,
+            "table",
+            downstream,
+            "lineage_downstream",
+            evidence_source,
+            confidence,
+            {"via": via},
+            commit=False,
+        )
         self.conn.commit()
+
+    def upsert_asset_edge(self, source_type, source_id, target_type, target_id, relation_type, evidence_source="", confidence="", evidence=None, commit=True):
+        if not source_type or not source_id or not target_type or not target_id or not relation_type:
+            return
+        self.conn.execute(
+            """
+            insert into asset_edges
+                (source_type, source_id, target_type, target_id, relation_type, evidence_source, confidence, evidence_json)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(source_type, source_id, target_type, target_id, relation_type, evidence_source) do update set
+                confidence = excluded.confidence,
+                evidence_json = excluded.evidence_json
+            """,
+            (
+                source_type,
+                source_id,
+                target_type,
+                target_id,
+                relation_type,
+                evidence_source,
+                confidence,
+                json.dumps(evidence or {}, ensure_ascii=False, sort_keys=True),
+            ),
+        )
+        if commit:
+            self.conn.commit()
 
     def upsert_quality_rule(self, item):
         self.conn.execute(
@@ -237,10 +299,36 @@ class AssetStore:
             ),
         )
         self.conn.execute("delete from task_tables where task_id = ?", (item["id"],))
+        self.conn.execute(
+            "delete from asset_edges where source_type = 'task' and source_id = ? and target_type = 'table' and relation_type in ('reads_table', 'writes_table')",
+            (item["id"],),
+        )
         for table_name in item.get("inputs", []):
             self.conn.execute("insert into task_tables (task_id, table_name, direction) values (?, ?, 'input')", (item["id"], table_name))
+            self.upsert_asset_edge(
+                "task",
+                item["id"],
+                "table",
+                table_name,
+                "reads_table",
+                "wedata_task_payload",
+                "medium",
+                {"task_name": item.get("name", ""), "direction": "input"},
+                commit=False,
+            )
         for table_name in item.get("outputs", []):
             self.conn.execute("insert into task_tables (task_id, table_name, direction) values (?, ?, 'output')", (item["id"], table_name))
+            self.upsert_asset_edge(
+                "task",
+                item["id"],
+                "table",
+                table_name,
+                "writes_table",
+                "wedata_task_payload",
+                "medium",
+                {"task_name": item.get("name", ""), "direction": "output"},
+                commit=False,
+            )
         self.conn.commit()
 
     def upsert_data_source(self, item):
@@ -268,6 +356,10 @@ class AssetStore:
 
     def replace_data_source_tasks(self, data_source_id, tasks):
         self.conn.execute("delete from data_source_tasks where data_source_id = ?", (data_source_id,))
+        self.conn.execute(
+            "delete from asset_edges where source_type = 'data_source' and source_id = ? and relation_type in ('has_related_task', 'inferred_output_table')",
+            (data_source_id,),
+        )
         for item in tasks:
             self.conn.execute(
                 """
@@ -286,6 +378,17 @@ class AssetStore:
                     item.get("owner", ""),
                 ),
             )
+            self.upsert_asset_edge(
+                "data_source",
+                data_source_id,
+                "task",
+                item["task_id"],
+                "has_related_task",
+                "wedata_get_data_source_related_tasks",
+                "high",
+                {"task_name": item.get("task_name", ""), "project_id": item.get("project_id", ""), "project_name": item.get("project_name", "")},
+                commit=False,
+            )
             table_name = _data_source_task_output_table(item.get("task_name", ""))
             if table_name:
                 self.conn.execute(
@@ -300,6 +403,28 @@ class AssetStore:
                         data_source_id = coalesce(nullif(excluded.data_source_id, ''), tables.data_source_id)
                     """,
                     (table_name, data_source_id),
+                )
+                self.upsert_asset_edge(
+                    "data_source",
+                    data_source_id,
+                    "table",
+                    table_name,
+                    "inferred_output_table",
+                    "data_source_related_task_name",
+                    "medium",
+                    {"task_id": item["task_id"], "task_name": item.get("task_name", "")},
+                    commit=False,
+                )
+                self.upsert_asset_edge(
+                    "task",
+                    item["task_id"],
+                    "table",
+                    table_name,
+                    "writes_table",
+                    "data_source_related_task_name",
+                    "medium",
+                    {"data_source_id": data_source_id, "task_name": item.get("task_name", "")},
+                    commit=False,
                 )
         self.conn.commit()
 
@@ -428,6 +553,7 @@ class AssetStore:
             "task_runs": self._count("task_runs"),
             "data_sources": self._count("data_sources"),
             "data_source_tasks": self._count("data_source_tasks"),
+            "asset_edges": self._count("asset_edges"),
             "lineage_edges": self._count("lineage"),
             "quality_rules": self._count("quality_rules"),
             "expert_labels": self._count("expert_labels"),

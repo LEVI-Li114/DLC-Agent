@@ -42,13 +42,21 @@ def cleanup_derived_tables(conn, apply=False):
         ("quality_rules", f"table_name in ({placeholders})", names),
         ("table_partitions", f"table_name in ({placeholders})", names),
         ("expert_labels", f"asset_type = 'table' and asset_name in ({placeholders})", names),
+        ("asset_edges", f"(source_type = 'table' and source_id in ({placeholders})) or (target_type = 'table' and target_id in ({placeholders}))", names + names),
         ("tables", f"name in ({placeholders})", names),
     ]
     with conn:
         for table, where, params in targets:
+            if not _table_exists(conn, table):
+                counts[f"deleted_{table}"] = 0
+                continue
             cur = conn.execute(f"delete from {table} where {where}", params)
             counts[f"deleted_{table}"] = cur.rowcount
     return counts
+
+
+def _table_exists(conn, table_name):
+    return bool(conn.execute("select 1 from sqlite_master where type = 'table' and name = ?", (table_name,)).fetchone())
 
 
 def _parse_args():

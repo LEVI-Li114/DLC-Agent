@@ -22,7 +22,7 @@ def import_wedata_snapshot(store, snapshot):
         store.upsert_task(task)
         for output in task.get("outputs", []):
             for input_table in task.get("inputs", []):
-                store.upsert_lineage(input_table, output, task.get("name") or task["id"])
+                store.upsert_lineage(input_table, output, task.get("name") or task["id"], "wedata_task_payload", "medium")
 
     for edge in snapshot.get("lineage", []):
         store.upsert_lineage(edge["upstream"], edge["downstream"], edge.get("via", ""))

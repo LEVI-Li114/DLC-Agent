@@ -169,13 +169,14 @@ def _sync_partitions(client, project_id, table_names, page_size, progress_every=
         if not _partition_payload_ready(payload):
             failures.append({"table": table_name, "error": "missing required partition payload fields", "payload": payload})
             continue
-        if partition_date:
+        if partition_date and os.environ.get("WEDATA_PARTITION_SERVICE", "wedata") != "dlc":
             payload["PartitionDate"] = partition_date
         try:
             response = _list_partitions(partition_client, action, payload, page_size)
         except RuntimeError as exc:
             if "InvalidAction" not in str(exc):
-                raise
+                failures.append({"table": table_name, "error": str(exc), "payload": payload})
+                continue
             return {
                 "Response": {
                     "Error": {"Code": "InvalidAction", "Message": str(exc)},
@@ -183,8 +184,6 @@ def _sync_partitions(client, project_id, table_names, page_size, progress_every=
                     "Data": {"Items": []},
                 }
             }
-            failures.append({"table": table_name, "error": str(exc), "payload": payload})
-            continue
         for item in _partition_items(response):
             item["QueriedTableName"] = table_name
             items.append(item)

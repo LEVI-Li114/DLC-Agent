@@ -37,6 +37,8 @@ class FakePartitionClient:
 
 class FakeDlcPartitionClient:
     def call(self, action, payload):
+        if "PartitionDate" in payload:
+            return {"Response": {"Error": {"Code": "UnknownParameter", "Message": "The parameter `PartitionDate` is not recognized."}}}
         offset = int(payload.get("Offset") or 0)
         item = {
             "Partition": "dt=20260708" if offset == 0 else "dt=20260709",
@@ -51,6 +53,11 @@ class FakeDlcPartitionClient:
 class FakeInvalidActionPartitionClient:
     def call(self, action, payload):
         return {"Response": {"Error": {"Code": "InvalidAction", "Message": f"Action {action} is not supported in this version"}}}
+
+
+class FakeRuntimePartitionClient:
+    def call(self, action, payload):
+        return {"Response": {"Error": {"Code": "ResourceNotFound", "Message": "table not found"}}}
 
 
 class FakeCatalogMetadataClient(FakeMetadataClient):
@@ -188,7 +195,7 @@ class SyncWeDataTest(unittest.TestCase):
             self.assertEqual(_partition_payload("project-1", "ads_revenue", item), {"ProjectId": "project-1", "TableName": "ads_revenue", "DataSourceId": 55975, "DatabaseName": "ads_mart"})
 
     def test_dlc_partition_sync_reads_mixed_partition_stats(self):
-        with patch.dict(os.environ, {"WEDATA_PARTITION_SERVICE": "dlc", "DLC_CATALOG": "DataLakeCatalog"}), patch("dlc_mcp.sync_wedata._partition_client", return_value=FakeDlcPartitionClient()):
+        with patch.dict(os.environ, {"WEDATA_PARTITION_SERVICE": "dlc", "DLC_CATALOG": "DataLakeCatalog", "WEDATA_PARTITION_DATE": "2026-07-08"}), patch("dlc_mcp.sync_wedata._partition_client", return_value=FakeDlcPartitionClient()):
             response = _sync_partitions(
                 FakePartitionClient(),
                 "project",
@@ -216,6 +223,13 @@ class SyncWeDataTest(unittest.TestCase):
         self.assertEqual(response["Response"]["Error"]["Code"], "InvalidAction")
         self.assertEqual(response["Response"]["UnsupportedAction"], "ListTablePartitions")
         self.assertEqual(response["Response"]["Data"]["Items"], [])
+
+    def test_partition_sync_records_table_failures_and_continues(self):
+        response = _sync_partitions(FakeRuntimePartitionClient(), "project", ["ads_revenue"], 100, progress_every=0)
+
+        self.assertEqual(response["Response"]["Data"]["Items"], [])
+        self.assertEqual(response["Response"]["PartitionFailures"][0]["table"], "ads_revenue")
+        self.assertIn("ResourceNotFound", response["Response"]["PartitionFailures"][0]["error"])
 
 
 if __name__ == "__main__":
