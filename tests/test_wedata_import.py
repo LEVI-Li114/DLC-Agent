@@ -237,6 +237,32 @@ class WeDataImportTest(unittest.TestCase):
         self.assertEqual(partition["partition_date"], "2026-07-08")
         self.assertEqual(partition["row_count"], 123)
 
+    def test_maps_dlc_iceberg_partition_stats(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "table_partitions": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "QueriedTableName": "ads_bill_company_1d_di",
+                                    "Partition": "dt=20260708",
+                                    "Records": 123,
+                                    "DataFileStorage": 456,
+                                    "DataFileSize": 7,
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        partition = snapshot["table_partitions"][0]
+        self.assertEqual(partition["row_count"], 123)
+        self.assertEqual(partition["storage_bytes"], 456)
+        self.assertEqual(partition["file_count"], 7)
+
     def test_maps_data_sources_from_api_dump(self):
         snapshot = snapshot_from_api_dump(
             {

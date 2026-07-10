@@ -161,15 +161,21 @@ def _partition_section(store, raw, sample_limit, project_id):
         for payload in _partition_payloads(row, project_id):
             payload_rows.append([row["name"], json.dumps(payload, ensure_ascii=False, sort_keys=True)])
     partition_raw = raw.get("table_partitions", {})
-    raw_count = len(_raw_items(partition_raw.get("data"))) if partition_raw.get("exists") and partition_raw.get("data") is not None else "未知"
-    return "\n\n".join(
-        [
-            "## 分区接口参数诊断",
-            "- 默认不调用外部 API，不做全量分区同步，只生成小样本候选 payload。",
-            f"- raw 分区 item 数：**{raw_count}**",
-            _table(["表名", "候选 payload"], payload_rows),
-        ]
-    )
+    partition_data = partition_raw.get("data") or {}
+    error = partition_data.get("Response", {}).get("Error", {}) if isinstance(partition_data, dict) else {}
+    unsupported_action = partition_data.get("Response", {}).get("UnsupportedAction", "") if isinstance(partition_data, dict) else ""
+    raw_count = len(_raw_items(partition_data)) if partition_raw.get("exists") and partition_raw.get("data") is not None else "未知"
+    lines = [
+        "## 分区接口参数诊断",
+        "- 默认不调用外部 API，不做全量分区同步，只生成小样本候选 payload。",
+        f"- raw 分区 item 数：**{raw_count}**",
+    ]
+    if error.get("Code") == "InvalidAction":
+        action = unsupported_action or "ListTablePartitions"
+        lines.append(f"- InvalidAction：`{_cell(action)}` 在当前 WeData 版本不支持，属于 action 名/版本不支持，不是参数错误。")
+        lines.append(f"- 接口返回：{_cell(error.get('Message'))}")
+    lines.append(_table(["表名", "候选 payload"], payload_rows))
+    return "\n\n".join(lines)
 
 
 def _task_run_section(store, raw, sample_limit):

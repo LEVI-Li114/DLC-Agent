@@ -160,23 +160,43 @@ def _sync_data_source_tasks(client, data_sources_response, progress_every=10):
 def _sync_partitions(client, project_id, table_names, page_size, progress_every=10, catalog_tables=None):
     action = os.environ.get("WEDATA_PARTITION_ACTION", "ListTablePartitions")
     partition_date = os.environ.get("WEDATA_PARTITION_DATE", "")
+    partition_client = _partition_client(client)
     items = []
+    failures = []
     total = len(table_names)
     for index, table_name in enumerate(table_names, start=1):
         payload = _partition_payload(project_id, table_name, (catalog_tables or {}).get(table_name, {}))
+        if not _partition_payload_ready(payload):
+            failures.append({"table": table_name, "error": "missing required partition payload fields", "payload": payload})
+            continue
         if partition_date:
             payload["PartitionDate"] = partition_date
-        response = _list_all(client, action, payload, page_size)
-        for item in response.get("Response", {}).get("Data", {}).get("Items") or []:
+        try:
+            response = _list_partitions(partition_client, action, payload, page_size)
+        except RuntimeError as exc:
+            if "InvalidAction" not in str(exc):
+                raise
+            return {
+                "Response": {
+                    "Error": {"Code": "InvalidAction", "Message": str(exc)},
+                    "UnsupportedAction": action,
+                    "Data": {"Items": []},
+                }
+            }
+            failures.append({"table": table_name, "error": str(exc), "payload": payload})
+            continue
+        for item in _partition_items(response):
             item["QueriedTableName"] = table_name
             items.append(item)
         if progress_every and (index == total or index % progress_every == 0):
             print(f"synced partitions for {index}/{total} tables", flush=True)
-    return {"Response": {"Data": {"Items": items}}}
+    return {"Response": {"Data": {"Items": items}, "PartitionFailures": failures}}
 
 
 def _partition_payload(project_id, table_name, catalog_item=None):
     item = catalog_item or {}
+    if os.environ.get("WEDATA_PARTITION_SERVICE", "wedata") == "dlc":
+        return _dlc_partition_payload(table_name, item)
     payload = {"ProjectId": project_id, "TableName": table_name}
     mode = os.environ.get("WEDATA_PARTITION_PAYLOAD_MODE", "table")
     if mode == "guid" and (item.get("Guid") or item.get("TableGuid")):
@@ -189,6 +209,69 @@ def _partition_payload(project_id, table_name, catalog_item=None):
         if item.get("DatabaseName") or item.get("Database") or item.get("DbName"):
             payload["DatabaseName"] = item.get("DatabaseName") or item.get("Database") or item.get("DbName")
     return payload
+
+
+def _partition_client(default_client):
+    if os.environ.get("WEDATA_PARTITION_SERVICE", "wedata") != "dlc":
+        return default_client
+    return TencentCloudClient(
+        os.environ["TENCENTCLOUD_SECRET_ID"],
+        os.environ["TENCENTCLOUD_SECRET_KEY"],
+        "dlc",
+        os.environ.get("DLC_API_VERSION", "2021-01-25"),
+        os.environ.get("TENCENTCLOUD_REGION", "ap-guangzhou"),
+        endpoint=os.environ.get("DLC_ENDPOINT"),
+    )
+
+
+def _dlc_partition_payload(table_name, item):
+    payload = {
+        "Catalog": os.environ.get("DLC_CATALOG", "DataLakeCatalog"),
+        "Database": item.get("DatabaseName") or item.get("Database") or item.get("DbName"),
+        "Table": table_name,
+    }
+    return {key: value for key, value in payload.items() if value}
+
+
+def _partition_payload_ready(payload):
+    if os.environ.get("WEDATA_PARTITION_SERVICE", "wedata") != "dlc":
+        return bool(payload.get("ProjectId") and payload.get("TableName"))
+    return bool(payload.get("Catalog") and payload.get("Database") and payload.get("Table"))
+
+
+def _list_partitions(client, action, payload, page_size):
+    if os.environ.get("WEDATA_PARTITION_SERVICE", "wedata") != "dlc":
+        return _list_all(client, action, payload, page_size)
+    first = client.call(action, {**payload, "Limit": page_size, "Offset": 0})
+    if "Error" in first.get("Response", {}):
+        error = first["Response"]["Error"]
+        raise RuntimeError(f"{action} failed: {error.get('Code')} {error.get('Message')}")
+    mixed = first.get("Response", {}).get("MixedPartitions") or {}
+    total = int(mixed.get("TotalSize") or 0)
+    items = _partition_items(first)
+    offset = page_size
+    while offset < total:
+        response = client.call(action, {**payload, "Limit": page_size, "Offset": offset})
+        if "Error" in response.get("Response", {}):
+            error = response["Response"]["Error"]
+            raise RuntimeError(f"{action} failed: {error.get('Code')} {error.get('Message')}")
+        items.extend(_partition_items(response))
+        offset += page_size
+    first.setdefault("Response", {}).setdefault("MixedPartitions", {})["IcebergPartitions"] = items
+    return first
+
+
+def _partition_items(response):
+    data = response.get("Response", {}).get("Data", {})
+    if isinstance(data, dict):
+        for key in ("Items", "Rows", "List", "Records"):
+            if isinstance(data.get(key), list):
+                return data[key]
+    mixed = response.get("Response", {}).get("MixedPartitions") or {}
+    for key in ("IcebergPartitions", "HivePartitions", "Partitions"):
+        if isinstance(mixed.get(key), list):
+            return mixed[key]
+    return []
 
 
 def partition_payload_candidates(project_id, table):

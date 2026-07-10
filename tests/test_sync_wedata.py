@@ -35,6 +35,24 @@ class FakePartitionClient:
         return {"Response": {"Data": {"Items": [{"PartitionName": "dt=" + payload.get("PartitionDate", "2026-07-08"), "RowCount": 10}]}}}
 
 
+class FakeDlcPartitionClient:
+    def call(self, action, payload):
+        offset = int(payload.get("Offset") or 0)
+        item = {
+            "Partition": "dt=20260708" if offset == 0 else "dt=20260709",
+            "Records": 10 + offset,
+            "DataFileStorage": 100 + offset,
+            "DataFileSize": 1,
+            "UpdateTime": "2026-07-09T03:00:32+08:00",
+        }
+        return {"Response": {"MixedPartitions": {"TotalSize": 2, "IcebergPartitions": [item]}}}
+
+
+class FakeInvalidActionPartitionClient:
+    def call(self, action, payload):
+        return {"Response": {"Error": {"Code": "InvalidAction", "Message": f"Action {action} is not supported in this version"}}}
+
+
 class FakeCatalogMetadataClient(FakeMetadataClient):
     def call(self, action, payload):
         if action == "ListTable":
@@ -168,6 +186,36 @@ class SyncWeDataTest(unittest.TestCase):
             self.assertEqual(_partition_payload("project-1", "ads_revenue", item), {"ProjectId": "project-1", "TableName": "ads_revenue", "DatabaseName": "ads_mart"})
         with patch.dict(os.environ, {"WEDATA_PARTITION_PAYLOAD_MODE": "datasource_database"}):
             self.assertEqual(_partition_payload("project-1", "ads_revenue", item), {"ProjectId": "project-1", "TableName": "ads_revenue", "DataSourceId": 55975, "DatabaseName": "ads_mart"})
+
+    def test_dlc_partition_sync_reads_mixed_partition_stats(self):
+        with patch.dict(os.environ, {"WEDATA_PARTITION_SERVICE": "dlc", "DLC_CATALOG": "DataLakeCatalog"}), patch("dlc_mcp.sync_wedata._partition_client", return_value=FakeDlcPartitionClient()):
+            response = _sync_partitions(
+                FakePartitionClient(),
+                "project",
+                ["ads_revenue"],
+                1,
+                progress_every=0,
+                catalog_tables={"ads_revenue": {"DatabaseName": "ads_mart"}},
+            )
+
+        items = response["Response"]["Data"]["Items"]
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["QueriedTableName"], "ads_revenue")
+        self.assertEqual(items[0]["Records"], 10)
+
+    def test_dlc_partition_payload_uses_database_table_and_catalog(self):
+        with patch.dict(os.environ, {"WEDATA_PARTITION_SERVICE": "dlc", "DLC_CATALOG": "DataLakeCatalog"}):
+            self.assertEqual(
+                _partition_payload("project-1", "ads_revenue", {"DatabaseName": "ads_mart"}),
+                {"Catalog": "DataLakeCatalog", "Database": "ads_mart", "Table": "ads_revenue"},
+            )
+
+    def test_partition_sync_marks_invalid_action_as_unsupported_instead_of_raising(self):
+        response = _sync_partitions(FakeInvalidActionPartitionClient(), "project", ["ads_revenue"], 100, progress_every=0)
+
+        self.assertEqual(response["Response"]["Error"]["Code"], "InvalidAction")
+        self.assertEqual(response["Response"]["UnsupportedAction"], "ListTablePartitions")
+        self.assertEqual(response["Response"]["Data"]["Items"], [])
 
 
 if __name__ == "__main__":

@@ -384,9 +384,9 @@ def _partition_from_api(item):
         "table_name": table_name,
         "partition_name": partition_name,
         "partition_date": _get(item, "PartitionDate", "Dt", "Date", "BizDate", "partitionDate", default=_date_from_partition_name(partition_name)),
-        "row_count": _get(item, "RowCount", "Rows", "RecordCount", "rowCount", default=0),
-        "storage_bytes": _get(item, "StorageBytes", "StorageSize", "SizeBytes", "storageBytes", default=0),
-        "file_count": _get(item, "FileCount", "Files", "fileCount", default=0),
+        "row_count": _get(item, "RowCount", "Rows", "Records", "RecordCount", "rowCount", default=0),
+        "storage_bytes": _get(item, "StorageBytes", "StorageSize", "DataFileStorage", "SizeBytes", "storageBytes", default=0),
+        "file_count": _get(item, "FileCount", "Files", "DataFileSize", "fileCount", default=0),
         "updated_at": _get(item, "UpdateTime", "ModifiedTime", "LastModifyTime", "updatedAt"),
         "collected_at": _get(item, "CollectedAt", "CreateTime", "createTime"),
     }

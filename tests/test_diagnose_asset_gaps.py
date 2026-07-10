@@ -70,6 +70,21 @@ class DiagnoseAssetGapsTest(unittest.TestCase):
         self.assertIn("ads", report)
         self.assertIn("抽样中可由名称/库/路径推断：1", report)
 
+    def test_partition_raw_invalid_action_reports_action_version_unsupported(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "assets.db")
+            sync_dir = os.path.join(tmpdir, "sync")
+            os.makedirs(sync_dir)
+            self._store(db_path)
+            with open(os.path.join(sync_dir, "wedata_table_partitions.json"), "w", encoding="utf-8") as f:
+                f.write('{"Response":{"Error":{"Code":"InvalidAction","Message":"Action ListTablePartitions is not supported in version 2025-08-06"},"Data":{"Items":[]},"UnsupportedAction":"ListTablePartitions"}}')
+
+            report = render_gap_diagnosis(db_path, sync_dir)
+
+        self.assertIn("InvalidAction", report)
+        self.assertIn("action 名/版本不支持", report)
+        self.assertIn("ListTablePartitions", report)
+
 
 if __name__ == "__main__":
     unittest.main()
