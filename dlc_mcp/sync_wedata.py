@@ -89,6 +89,7 @@ def main():
     store = AssetStore(sqlite3.connect(db_path))
     store.init_schema()
     import_wedata_snapshot(store, snapshot_from_api_dump(dump))
+    retention = store.prune_task_runs(int(os.environ.get("DLC_MCP_TASK_RUN_RETENTION_DAYS", "7")))
 
     total = len(tasks_response["Response"]["Data"]["Items"])
     print(f"synced {total} WeData tasks into {db_path}", flush=True)
@@ -96,6 +97,7 @@ def main():
     if "task_instances" in dump:
         run_total = len(dump["task_instances"]["Response"]["Data"]["Items"])
         print(f"synced {run_total} WeData task instances", flush=True)
+        print(f"pruned {retention['deleted_count']} task instances older than {retention['cutoff_date']}", flush=True)
     if "tables" in dump:
         print(f"synced table catalog for {_response_item_count(dump['tables'])} tables", flush=True)
     if os.environ.get("WEDATA_SYNC_METADATA") == "1":
@@ -273,7 +275,7 @@ def _task_detail(client, project_id, related):
         payload = {"ProjectId": project_id}
         if task_id:
             payload["TaskId"] = task_id
-        if task_name:
+        elif task_name:
             payload["TaskName"] = task_name
         try:
             response = client.call(action, payload)
@@ -298,6 +300,9 @@ def _first_detail_item(response):
     if not isinstance(data, dict):
         return {}
     result = dict(data)
+    base = result.get("TaskBaseAttribute") or {}
+    if isinstance(base, dict):
+        result.update({k: v for k, v in base.items() if k not in result})
     config = result.get("TaskConfiguration") or result.get("Configuration") or {}
     if isinstance(config, str):
         try:

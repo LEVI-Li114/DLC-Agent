@@ -3,12 +3,14 @@ import json
 import os
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 from .assets import AssetStore
 from .sync_table_fields import _call_with_retries
 from .tencentcloud import TencentCloudClient
 from .wedata import import_wedata_snapshot, snapshot_from_api_dump
+from .sync_wedata import _first_detail_item
 
 
 def main():
@@ -31,6 +33,8 @@ def main():
 
     if args.sync_tasks:
         tasks = _list_all_retried(client, "ListTasks", {"ProjectId": project_id}, page_size, args)
+        if args.sync_task_details:
+            tasks = _sync_task_details(client, project_id, tasks, args, report)
         dump["tasks"] = tasks
         report["task_count"] = len(tasks.get("Response", {}).get("Data", {}).get("Items") or [])
 
@@ -53,7 +57,10 @@ def main():
         report["instance_window"] = {"start": start_time, "end": end_time}
         report["task_instance_count"] = len(instances.get("Response", {}).get("Data", {}).get("Items") or [])
 
+    if report.get("quality_authoritative"):
+        report["stale_quality_rules_deleted"] = store.clear_quality_rules()
     import_wedata_snapshot(store, snapshot_from_api_dump(dump))
+    report["task_run_retention"] = store.prune_task_runs(args.task_run_retention_days)
     report.update(
         {
             "started_at": datetime.now().isoformat(timespec="seconds"),
@@ -82,7 +89,10 @@ def _parse_args():
     parser.add_argument("--instance-lookback-days", type=int, default=int(os.environ.get("WEDATA_FULL_FACTS_INSTANCE_LOOKBACK_DAYS", "7")))
     parser.add_argument("--instance-max-pages", type=int, default=int(os.environ.get("WEDATA_FULL_FACTS_INSTANCE_MAX_PAGES", "500")))
     parser.add_argument("--instance-keyword", default=os.environ.get("WEDATA_FULL_FACTS_INSTANCE_KEYWORD", ""))
+    parser.add_argument("--task-detail-workers", type=int, default=int(os.environ.get("WEDATA_FULL_FACTS_TASK_DETAIL_WORKERS", "8")))
+    parser.add_argument("--task-run-retention-days", type=int, default=int(os.environ.get("DLC_MCP_TASK_RUN_RETENTION_DAYS", "7")))
     parser.add_argument("--sync-tasks", action="store_true", default=os.environ.get("WEDATA_FULL_FACTS_SYNC_TASKS", "1") == "1")
+    parser.add_argument("--sync-task-details", action="store_true", default=os.environ.get("WEDATA_FULL_FACTS_SYNC_TASK_DETAILS", "1") == "1")
     parser.add_argument("--sync-lineage", action="store_true", default=os.environ.get("WEDATA_FULL_FACTS_SYNC_LINEAGE", "1") == "1")
     parser.add_argument("--sync-quality", action="store_true", default=os.environ.get("WEDATA_FULL_FACTS_SYNC_QUALITY", "1") == "1")
     parser.add_argument("--sync-instances", action="store_true", default=os.environ.get("WEDATA_FULL_FACTS_SYNC_INSTANCES", "1") == "1")
@@ -95,6 +105,14 @@ def _sync_lineage_quality(client, project_id, tables, page_size, args, report):
     quality_rules = []
     lineage_ok = 0
     quality_ok = 0
+    if args.sync_quality:
+        try:
+            response = _list_all_retried(client, "ListQualityRules", {"ProjectId": project_id}, page_size, args)
+            quality_rules = response.get("Response", {}).get("Data", {}).get("Items") or []
+            quality_ok = len({item.get("TableName") or item.get("DatasourceTableName") for item in quality_rules if item.get("TableName") or item.get("DatasourceTableName")})
+            report["quality_authoritative"] = True
+        except Exception as exc:
+            report["failures"].append({"fact": "quality", "error": str(exc)})
     for index, table in enumerate(tables, start=1):
         name = table.get("name", "")
         guid = table.get("guid", "")
@@ -115,19 +133,6 @@ def _sync_lineage_quality(client, project_id, tables, page_size, args, report):
         elif args.sync_lineage:
             report["failures"].append({"fact": "lineage", "table": name, "error": "missing_guid"})
 
-        if args.sync_quality and name:
-            try:
-                response = _call_with_retries(
-                    lambda: _list_all_retried(client, "ListQualityRules", {"ProjectId": project_id, "Filters": [{"Name": "TableName", "Values": [name]}]}, page_size, args),
-                    "ListQualityRules",
-                    args,
-                )
-                quality_rules.extend(response.get("Response", {}).get("Data", {}).get("Items") or [])
-                quality_ok += 1
-            except Exception as exc:
-                report["failures"].append({"fact": "quality", "table": name, "error": str(exc)})
-            _sleep(args)
-
         if args.progress_every and (index == len(tables) or index % args.progress_every == 0):
             print(f"progress {index}/{len(tables)} lineage_tables={lineage_ok} quality_tables={quality_ok} failed={len(report['failures'])}", flush=True)
 
@@ -139,6 +144,40 @@ def _sync_lineage_quality(client, project_id, tables, page_size, args, report):
         "lineage": {"Response": {"Data": {"Items": lineage}}},
         "quality_rules": {"Response": {"Data": {"Items": quality_rules}}},
     }
+
+
+def _sync_task_details(client, project_id, response, args, report):
+    items = response.get("Response", {}).get("Data", {}).get("Items") or []
+    enriched = [None] * len(items)
+
+    def fetch(index, item):
+        task_id = str(item.get("TaskId") or item.get("Id") or "")
+        detail = _call_with_retries(
+            lambda: client.call("GetTask", {"ProjectId": project_id, "TaskId": task_id}),
+            f"GetTask {task_id}",
+            args,
+        )
+        error = detail.get("Response", {}).get("Error")
+        if error:
+            raise RuntimeError(f"{error.get('Code')} {error.get('Message')}")
+        return index, {**item, **{k: v for k, v in _first_detail_item(detail).items() if v not in (None, "", [], {})}}
+
+    with ThreadPoolExecutor(max_workers=max(1, args.task_detail_workers)) as executor:
+        futures = {executor.submit(fetch, index, item): (index, item) for index, item in enumerate(items)}
+        for completed, future in enumerate(as_completed(futures), start=1):
+            index, item = futures[future]
+            try:
+                result_index, enriched_item = future.result()
+                enriched[result_index] = enriched_item
+            except Exception as exc:
+                enriched[index] = item
+                report["failures"].append({"fact": "task_detail", "task_id": str(item.get("TaskId") or ""), "error": str(exc)})
+            if args.progress_every and (completed == len(items) or completed % args.progress_every == 0):
+                print(f"task details {completed}/{len(items)} failed={len(report['failures'])}", flush=True)
+
+    response["Response"]["Data"]["Items"] = enriched
+    report["task_detail_count"] = sum(1 for item in enriched if item and (item.get("TaskConfiguration") or item.get("CodeContent")))
+    return response
 
 
 def _list_all_retried(client, action, payload, page_size, args, max_pages=None):

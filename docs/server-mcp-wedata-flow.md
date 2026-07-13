@@ -113,11 +113,37 @@ WEDATA_SYNC_METADATA=1 WEDATA_METADATA_TABLES=ads_bill_company_1d_di,dws_360_fin
 This uses:
 
 - `ListTable` to resolve table GUID, database, owner, description
+- `GetTable` to refresh one table's metadata detail by `TableGuid`
 - `GetTableColumns` to sync real fields
 - `ListLineage` to sync downstream lineage
 - `ListQualityRules` to sync quality monitoring rules
 
 The metadata table limit keeps the sync small enough for manual runs. Increase it after the first run is stable.
+
+The MCP server also supports cache-first, on-demand refresh for project and task metadata:
+
+| MCP tool | WeData action | Cached table |
+| --- | --- | --- |
+| `list_projects(live=true)` | `ListProjects` | `projects` |
+| `get_project(live=true)` | `GetProject` | `projects` |
+| `list_project_members(live=true)` | `ListProjectMembers` | `project_members` |
+| `list_downstream_tasks(live=true)` | `ListDownstreamTasks` | `task_relations` |
+| `list_upstream_tasks(live=true)` | `ListUpstreamTasks` | `task_relations` |
+| `get_table(live=true)` | `GetTable` | `tables` |
+
+`GetTable` accepts only `TableGuid` in this integration. Resolve and cache the GUID through the table catalog first. Do not derive output tables from task-name prefixes.
+
+After a backfill, do not use row counts alone as the acceptance check. Query `get_sync_health`, `get_asset_coverage`, and `list_asset_coverage_gaps`, then sample tables across ODS/DIM/DWD/DWS/ADS to verify fields, lineage, tasks, runs, quality rules, and data-source links.
+
+Full fact sync also calls `GetTask` for each task to rebuild real input/output mappings. Data-integration task node JSON is decoded from `TaskConfiguration.CodeContent`; no task-name fallback is allowed. The same mapping connects existing task instances and `data_source_tasks` to tables.
+
+Task instances retain seven calendar days by default:
+
+```bash
+DLC_MCP_TASK_RUN_RETENTION_DAYS=7 bash deploy/sync-wedata-full.sh /etc/dlc-mcp/env
+```
+
+Quality rules are listed once for the project with pagination. A successful response replaces the prior SQLite rule cache; API failure leaves the existing cache intact.
 
 For a stable one-off full table field backfill, use the dedicated field-only script. It syncs table catalog and `GetTableColumns`, skips tables that already have columns unless forced, retries transient failures, writes a report with elapsed time, and avoids lineage/quality calls:
 

@@ -1,4 +1,6 @@
 import sqlite3
+import base64
+import json
 import unittest
 
 from dlc_mcp.assets import AssetStore
@@ -776,6 +778,34 @@ class WeDataImportTest(unittest.TestCase):
 
         self.assertEqual(snapshot["tasks"][0]["outputs"], ["dws_bill_company_1d_di"])
         self.assertEqual(snapshot["tasks"][0]["inputs"], ["ods_bill_company_di"])
+
+    def test_maps_sync_task_tables_from_get_task_base64_code_content(self):
+        nodes = [
+            {"NodeType": "INPUT", "Config": [{"Name": "TableNames", "Value": "cloud_cost_aliyun_day"}]},
+            {"NodeType": "OUTPUT", "Config": [{"Name": "TableNames", "Value": "ods_cloud_cost_aliyun_day_di"}]},
+        ]
+        code = base64.b64encode(json.dumps(nodes).encode()).decode()
+        snapshot = snapshot_from_api_dump(
+            {
+                "tasks": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "TaskId": "task_sync",
+                                    "TaskName": "m2c_ods_cloud_cost_aliyun_day_di",
+                                    "TaskConfiguration": {"CodeContent": code},
+                                    "CodeContent": code,
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(snapshot["tasks"][0]["inputs"], ["cloud_cost_aliyun_day"])
+        self.assertEqual(snapshot["tasks"][0]["outputs"], ["ods_cloud_cost_aliyun_day_di"])
 
     def test_maps_task_instance_time_fields(self):
         snapshot = snapshot_from_api_dump(

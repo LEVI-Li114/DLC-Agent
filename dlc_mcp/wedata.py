@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -227,18 +228,66 @@ TABLE_NAME_FIELDS = (
 def _task_table_names(item, direction):
     fields = INPUT_TABLE_FIELDS if direction == "input" else OUTPUT_TABLE_FIELDS
     names = []
-    for field in fields:
-        names.extend(_table_names_from_value(item.get(field)))
-    config = item.get("DependencyConfig") or item.get("TaskDependency") or item.get("Dependency") or {}
-    if isinstance(config, str):
-        config = _json_dict(config)
-    if isinstance(config, dict):
-        config_fields = INPUT_TABLE_FIELDS if direction == "input" else OUTPUT_TABLE_FIELDS
-        for field in config_fields:
-            names.extend(_table_names_from_value(config.get(field)))
+    for document in _task_config_documents(item):
+        node_type = str(document.get("NodeType") or "").upper()
+        if node_type and node_type != direction.upper():
+            continue
+        for field in fields:
+            names.extend(_table_names_from_value(document.get(field)))
+        config = document.get("DependencyConfig") or document.get("TaskDependency") or document.get("Dependency") or {}
+        if isinstance(config, str):
+            config = _json_dict(config)
+        if isinstance(config, dict):
+            for field in fields:
+                names.extend(_table_names_from_value(config.get(field)))
+        names.extend(_table_names_from_named_config(document.get("Config"), direction))
     if not names:
         names.extend(_sql_table_names(_task_sql_text(item), direction))
     return _dedupe_table_names(names)
+
+
+def _task_config_documents(item):
+    documents = [item]
+    for field in ("TaskConfiguration", "Configuration"):
+        value = item.get(field)
+        if isinstance(value, str):
+            value = _json_dict(value)
+        if isinstance(value, dict):
+            documents.append(value)
+    code = item.get("CodeContent")
+    if isinstance(code, str) and code.strip():
+        decoded = _decode_json_content(code)
+        if isinstance(decoded, list):
+            documents.extend(value for value in decoded if isinstance(value, dict))
+        elif isinstance(decoded, dict):
+            documents.append(decoded)
+    return documents
+
+
+def _decode_json_content(value):
+    for candidate in (value, _decode_base64(value)):
+        if not candidate:
+            continue
+        try:
+            return json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return None
+
+
+def _decode_base64(value):
+    try:
+        return base64.b64decode(value, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+
+
+def _table_names_from_named_config(config, direction):
+    if not isinstance(config, list):
+        return []
+    values = {str(item.get("Name") or ""): item.get("Value") for item in config if isinstance(item, dict)}
+    node_tables = values.get("TableNames") or values.get("TableName") or values.get("TableId")
+    return _table_names_from_value(node_tables) if node_tables else []
 
 
 def _table_names_from_value(value):
@@ -308,10 +357,11 @@ SQL_FIELDS = (
 
 def _task_sql_text(item):
     chunks = []
-    for field in SQL_FIELDS:
-        value = item.get(field)
-        if isinstance(value, str) and value.strip():
-            chunks.append(value)
+    for document in _task_config_documents(item):
+        for field in SQL_FIELDS:
+            value = document.get(field)
+            if isinstance(value, str) and value.strip() and not (field == "CodeContent" and _decode_json_content(value) is not None):
+                chunks.append(value)
     for container in (item.get("TaskExt") or {}, item.get("Properties") or {}, item.get("Params") or {}):
         if isinstance(container, str):
             container = _json_dict(container)

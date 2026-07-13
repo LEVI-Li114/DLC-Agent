@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import os
+from datetime import datetime, timedelta
 
 
 GOVERNANCE_ISSUE_TYPES = [
@@ -893,6 +894,12 @@ class AssetStore:
             "task_runs": self._count("task_runs"),
             "data_sources": self._count("data_sources"),
             "data_source_tasks": self._count("data_source_tasks"),
+            "data_source_tasks_with_tables": self._one(
+                "select count(distinct dst.task_id) n from data_source_tasks dst join task_tables tt on tt.task_id = dst.task_id"
+            )["n"],
+            "data_source_task_table_links": self._one(
+                "select count(distinct dst.data_source_id || ':' || tt.table_name) n from data_source_tasks dst join task_tables tt on tt.task_id = dst.task_id"
+            )["n"],
             "projects": self._count("projects"),
             "project_members": self._count("project_members"),
             "task_relations": self._count("task_relations"),
@@ -907,6 +914,33 @@ class AssetStore:
             "latest_quality_check": self._max_text("quality_rules", "last_checked_at"),
             "latest_data_source_task_create": self._max_text("data_source_tasks", "create_time"),
         }
+        coverage = self._one(
+            """
+            select
+                count(*) as tables,
+                sum(case when c.n > 0 then 1 else 0 end) as fields,
+                sum(case when q.n > 0 then 1 else 0 end) as quality,
+                sum(case when coalesce(lu.n, 0) + coalesce(ld.n, 0) > 0 then 1 else 0 end) as lineage,
+                sum(case when tt.n > 0 then 1 else 0 end) as tasks,
+                sum(case when tr.n > 0 then 1 else 0 end) as runs,
+                sum(case when t.data_source_id != '' then 1 else 0 end) as data_source
+            from tables t
+            left join (select table_name, count(*) n from columns group by table_name) c on c.table_name = t.name
+            left join (select table_name, count(*) n from quality_rules group by table_name) q on q.table_name = t.name
+            left join (select upstream table_name, count(*) n from lineage group by upstream) lu on lu.table_name = t.name
+            left join (select downstream table_name, count(*) n from lineage group by downstream) ld on ld.table_name = t.name
+            left join (select table_name, count(*) n from task_tables group by table_name) tt on tt.table_name = t.name
+            left join (
+                select tt.table_name, count(*) n
+                from task_tables tt join task_runs r on r.task_id = tt.task_id
+                where tt.direction = 'output'
+                group by tt.table_name
+            ) tr on tr.table_name = t.name
+            """
+        )
+        table_count = int(coverage["tables"] or 0)
+        thresholds = {"fields": 0.95, "lineage": 0.50, "quality": 0.10, "tasks": 0.80, "runs": 0.80, "data_source": 0.95}
+        coverage_ratios = {key: round(int(coverage[key] or 0) / table_count, 4) if table_count else 0 for key in thresholds}
         gaps = []
         if counts["tasks"] == 0:
             gaps.append("未同步 WeData 任务列表")
@@ -928,14 +962,20 @@ class AssetStore:
             gaps.append("未同步 WeData 项目成员")
         if counts["task_relations"] == 0:
             gaps.append("未同步任务上下游依赖")
+        labels = {"fields": "字段", "lineage": "血缘", "quality": "质量规则", "tasks": "任务映射", "runs": "运行实例关联", "data_source": "数据源"}
+        for key, threshold in thresholds.items():
+            if coverage_ratios[key] < threshold:
+                gaps.append(f"{labels[key]}覆盖率 {coverage_ratios[key]:.1%} 低于阈值 {threshold:.0%}")
         return {
-            "status": "ok" if counts["tasks"] and not gaps else "partial",
+            "status": "ok" if table_count and not gaps else "partial",
             "counts": counts,
+            "coverage_ratios": coverage_ratios,
+            "coverage_thresholds": thresholds,
             "latest_signals": signals,
             "gaps": gaps,
             "notes": [
-                "当前版本根据资产库已有事实表聚合健康状态。",
-                "如果某类数量为 0，通常表示对应 WeData 同步开关未开启、接口未接入或本轮同步未覆盖。",
+                "健康状态同时检查事实数量和表级覆盖率。",
+                "低于阈值表示事实尚未可靠串联到表资产，不能仅凭事实表非空判定同步健康。",
             ],
         }
 
@@ -972,6 +1012,8 @@ class AssetStore:
         }
 
     def list_asset_coverage_gaps(self, gap_type="", layer="", limit=50):
+        if gap_type and not _normalize_gap_type(gap_type):
+            raise ValueError(f"unsupported gap_type: {gap_type}")
         args = []
         layer_filter = ""
         if layer:
@@ -1352,6 +1394,24 @@ class AssetStore:
             ),
         )
         self.conn.commit()
+
+    def prune_task_runs(self, retention_days=7, today=None):
+        cutoff = (today or datetime.now().date()) - timedelta(days=max(1, retention_days) - 1)
+        cursor = self.conn.execute(
+            """
+            delete from task_runs
+            where substr(coalesce(nullif(instance_date, ''), start_time), 1, 10) < ?
+              and substr(coalesce(nullif(instance_date, ''), start_time), 1, 10) glob '????-??-??'
+            """,
+            (cutoff.isoformat(),),
+        )
+        self.conn.commit()
+        return {"retention_days": retention_days, "cutoff_date": cutoff.isoformat(), "deleted_count": cursor.rowcount}
+
+    def clear_quality_rules(self):
+        cursor = self.conn.execute("delete from quality_rules")
+        self.conn.commit()
+        return cursor.rowcount
 
     def get_task(self, task_id):
         task = self._one("select * from tasks where id = ?", (task_id,))

@@ -96,8 +96,14 @@ DLC_MCP_GATEWAY_TOKEN=your-token \
 
 已有 WeData API 同步能力：
 
+- `ListProjects`
+- `GetProject`
+- `ListProjectMembers`
 - `ListTasks`
+- `ListUpstreamTasks`
+- `ListDownstreamTasks`
 - `ListTable`
+- `GetTable`
 - `GetTableColumns`
 - `ListLineage`
 - `ListQualityRules`
@@ -111,6 +117,21 @@ DLC_MCP_GATEWAY_TOKEN=your-token \
 - 部署脚本为 `deploy/sync-wedata-incremental.sh`。
 - 同步过程会把原始 WeData JSON dump 保存到同步目录，便于追溯。
 - 同步后的结构化数据写入 SQLite 资产库。
+- 项目、成员、任务依赖和单表详情也可由 MCP tool 在 `live=true` 时按需刷新；任务依赖独立存入 `task_relations`，不冒充表级血缘。
+- `GetTable` 必须使用真实 `TableGuid`。不能用任务名前缀推导表名，也不能向接口传 `ProjectId` 或 `TableName` 代替 GUID。
+
+### 2.5.1 新增项目与元数据工具
+
+| MCP tool | WeData 接口 | SQLite 事实 |
+| --- | --- | --- |
+| `list_projects` | `ListProjects` | `projects` |
+| `get_project` | `GetProject` | `projects` |
+| `list_project_members` | `ListProjectMembers` | `project_members` |
+| `list_downstream_tasks` | `ListDownstreamTasks` | `task_relations` |
+| `list_upstream_tasks` | `ListUpstreamTasks` | `task_relations` |
+| `get_table` | `GetTable` | `tables` |
+
+接口来源、文档分类和用途统一登记在 `cloud_api_catalog`。后续新增腾讯云接口时，必须同时更新该目录、对应归一化/缓存逻辑和文档。
 
 ### 2.6 已有资产健康和覆盖度工具
 
@@ -127,6 +148,37 @@ DLC_MCP_GATEWAY_TOKEN=your-token \
 - `list_asset_coverage_gaps` 用于列出缺字段、缺血缘、缺质量规则、缺任务、缺运行实例等资产覆盖缺口。
 
 这三个工具应成为数据资产底座阶段的主控台。
+
+### 2.7 当前服务端完整性判断（2026-07-13）
+
+新增接口补数结果：
+
+| 指标 | 结果 |
+| --- | ---: |
+| 项目 | 1 |
+| 项目成员 | 1 |
+| 任务上下游关系 | 8862 |
+| 表记录 | 3992 |
+| 有 GUID 的表 | 3955 |
+| `GetTable` 请求 | 3955/3955 成功 |
+| 完成详情增强的规范表名记录 | 3866 |
+
+结论：**表目录与表详情覆盖较高，但数据资产仍不是全量完整状态。** 目前仍有三类缺口：
+
+1. 37 条表记录没有 GUID，无法调用 `GetTable`。
+2. 89 个有 GUID 的目标没有落到规范表名详情记录，需要继续核对重复记录、空名称和名称归一化。
+3. 4 组任务关系请求对应的旧任务 ID 已被 WeData 判定为不存在；此外字段、血缘、质量规则、任务映射、运行实例和数据源关联必须分别通过覆盖度工具验收，不能由 `GetTable` 成功率代替。
+
+因此，“接口调用完成”只代表该类事实已采集；项目验收仍以 `get_sync_health`、`get_asset_coverage`、`list_asset_coverage_gaps` 和抽样核对结果为准。
+
+### 2.8 任务映射、实例保留与质量规则同步
+
+- `ListTasks` 只提供任务基础信息，不能作为输入表/产出表事实来源。
+- 全量事实同步对每个任务调用 `GetTask`。同步任务解码 `TaskConfiguration.CodeContent` 中的 Base64 节点配置，按 `NodeType=INPUT/OUTPUT` 提取真实表；SQL 任务从接口返回 SQL 中解析输入和产出。
+- 禁止通过 `m2c_ods_xxx -> ods_xxx` 等任务名规则推导表名。
+- `task_runs` 默认只保留最近 7 个自然日，同步完成后自动清理更早记录；可通过 `DLC_MCP_TASK_RUN_RETENTION_DAYS` 调整。
+- `ListQualityRules` 使用项目级全局分页拉取。成功后以本次结果替换 SQLite 中旧规则，避免逐表过滤调用和陈旧规则残留。
+- `get_sync_health` 同时检查事实数量和表级覆盖率阈值。任务、实例等事实表非空但未关联到表时，状态仍为 `partial`。
 
 ## 3. 当前阶段主线
 

@@ -659,6 +659,8 @@ def _format_markdown(tool_name, data):
     if tool_name == "get_sync_health":
         counts = data.get("counts", {})
         signals = data.get("latest_signals", {})
+        ratios = data.get("coverage_ratios", {})
+        thresholds = data.get("coverage_thresholds", {})
         return "\n\n".join(
             [
                 _section(
@@ -670,6 +672,7 @@ def _format_markdown(tool_name, data):
                     ],
                 ),
                 _table("资产类型 数量".split(), [[_count_label(k), v] for k, v in counts.items()]),
+                _table(["覆盖维度", "当前覆盖率", "健康阈值"], [[_count_label(k), f"{v:.1%}", f"{thresholds.get(k, 0):.0%}"] for k, v in ratios.items()]),
                 _section("最新同步线索", []) + "\n\n" + _table(
                     ["线索", "时间"],
                     [[_count_label(k), v] for k, v in signals.items()],

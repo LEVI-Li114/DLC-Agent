@@ -95,6 +95,12 @@ Update this list whenever a new MCP tool is added.
 | `get_asset_governance_daily_report(instance_date, layer, core_level)` | Return a daily governance patrol report. |
 | `is_core_table(table_name)` | Explain whether a table is core and why. |
 
+The project, member, task-relation, and table-detail tools use the same cache-first model as the existing asset tools. Set `live=true` to refresh the requested fact from WeData. `GetTable` requires a real table GUID; the service does not infer a table name from a task name.
+
+Asset completeness must be checked with `get_sync_health`, `get_asset_coverage`, and `list_asset_coverage_gaps`. A successful API backfill only proves that the corresponding facts were collected; it does not prove that fields, lineage, quality rules, task mappings, runs, and data-source links are complete for every table.
+
+Task input/output mappings come from real `GetTask` definitions. Data-integration node configuration is Base64-decoded and SQL tasks are parsed from returned SQL; task names are never used to infer table names. Task runs retain the latest seven calendar days by default (`DLC_MCP_TASK_RUN_RETENTION_DAYS`). Quality rules are fetched once as an authoritative paginated project list and replace stale cached rules after a successful full sync.
+
 ## Development
 
 ```bash

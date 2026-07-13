@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import date
 import unittest
 
 from dlc_mcp.assets import AssetStore
@@ -360,6 +361,8 @@ class AssetStoreTest(unittest.TestCase):
         self.assertEqual(health["counts"]["tasks"], 1)
         self.assertEqual(health["latest_signals"]["latest_task_run_start"], "2026-07-07 08:00:00")
         self.assertNotIn("未同步任务运行实例", health["gaps"])
+        self.assertEqual(health["status"], "partial")
+        self.assertIn("coverage_ratios", health)
         self.assertEqual(coverage["layers"][0]["layer"], "ads")
         self.assertEqual(coverage["layers"][0]["tables_with_quality_rules"], 1)
         self.assertEqual(coverage["layers"][1]["layer"], "dws")
@@ -371,6 +374,20 @@ class AssetStoreTest(unittest.TestCase):
         self.assertIn("quality", gaps["results"][0]["gap_keys"])
         self.assertIn("缺质量规则", gaps["results"][0]["gaps"])
         self.assertEqual(gaps["supported_gap_types"][0], "fields")
+
+    def test_asset_coverage_gaps_rejects_unknown_type(self):
+        with self.assertRaisesRegex(ValueError, "unsupported gap_type"):
+            make_store().list_asset_coverage_gaps(gap_type="missing_columns")
+
+    def test_prune_task_runs_keeps_only_recent_seven_calendar_days(self):
+        store = make_store()
+        for day in ("2026-07-06", "2026-07-07", "2026-07-13"):
+            store.upsert_task_run({"task_id": "task_001", "instance_id": day, "instance_date": day})
+
+        result = store.prune_task_runs(7, today=date(2026, 7, 13))
+
+        self.assertEqual(result, {"retention_days": 7, "cutoff_date": "2026-07-07", "deleted_count": 1})
+        self.assertEqual([row["instance_date"] for row in store.get_task_runs("task_001", 10)["runs"]], ["2026-07-13", "2026-07-07"])
 
     def test_asset_governance_daily_report_aggregates_patrol_sections(self):
         report = make_store().get_asset_governance_daily_report("2026-07-08", layer="ads")
