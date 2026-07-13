@@ -15,6 +15,70 @@ GOVERNANCE_ISSUE_TYPES = [
 ]
 
 
+TENCENT_CLOUD_API_CATALOG = [
+    {
+        "service": "wedata",
+        "action": "ListProjects",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "项目管理相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查看项目详情列表。",
+        "usage": "同步项目清单，支撑项目名展示、默认项目检查和项目级治理范围。",
+    },
+    {
+        "service": "wedata",
+        "action": "GetProject",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "项目管理相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查看项目详情。",
+        "usage": "补齐单个项目的负责人、状态、区域、描述和时间信息。",
+    },
+    {
+        "service": "wedata",
+        "action": "ListProjectMembers",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "项目管理相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查看项目成员列表。",
+        "usage": "同步项目成员和角色，支撑项目权限查看与 Owner 责任链补充。",
+    },
+    {
+        "service": "wedata",
+        "action": "ListDownstreamTasks",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "数据开发相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查看下游任务列表。",
+        "usage": "同步任务级下游依赖，补充表血缘之外的任务依赖分析。",
+    },
+    {
+        "service": "wedata",
+        "action": "ListUpstreamTasks",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "数据开发相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查看上游任务列表。",
+        "usage": "同步任务级上游依赖，补充表血缘之外的任务依赖分析。",
+    },
+    {
+        "service": "wedata",
+        "action": "GetTable",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "元数据相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "获取表详情。",
+        "usage": "补齐单表元数据详情，并与表画像能力共享表资产缓存。",
+    },
+]
+
+
 class AssetStore:
     def __init__(self, conn):
         self.conn = conn
@@ -115,6 +179,57 @@ class AssetStore:
                 owner text not null default '',
                 primary key (data_source_id, task_id)
             );
+            create table if not exists projects (
+                id text primary key,
+                name text not null default '',
+                display_name text not null default '',
+                description text not null default '',
+                owner text not null default '',
+                status text not null default '',
+                region text not null default '',
+                create_time text not null default '',
+                update_time text not null default '',
+                raw_json text not null default '{}'
+            );
+            create table if not exists project_members (
+                project_id text not null,
+                member_id text not null,
+                member_name text not null default '',
+                display_name text not null default '',
+                role_name text not null default '',
+                role_id text not null default '',
+                member_type text not null default '',
+                join_time text not null default '',
+                raw_json text not null default '{}',
+                primary key (project_id, member_id, role_id)
+            );
+            create table if not exists task_relations (
+                project_id text not null,
+                task_id text not null,
+                related_task_id text not null,
+                direction text not null,
+                task_name text not null default '',
+                related_task_name text not null default '',
+                dependency_type text not null default '',
+                owner text not null default '',
+                status text not null default '',
+                raw_json text not null default '{}',
+                primary key (project_id, task_id, related_task_id, direction)
+            );
+            create table if not exists cloud_api_catalog (
+                service text not null,
+                action text not null,
+                provider text not null default '',
+                product text not null default '',
+                doc_category text not null default '',
+                source_url text not null default '',
+                description text not null default '',
+                usage text not null default '',
+                used_by text not null default '',
+                is_active integer not null default 1,
+                updated_at text not null default '',
+                primary key (service, action)
+            );
             create table if not exists table_partitions (
                 table_name text not null,
                 partition_name text not null,
@@ -146,15 +261,244 @@ class AssetStore:
         self.conn.execute("create index if not exists idx_asset_edges_relation on asset_edges (relation_type, evidence_source, confidence)")
         self._add_column_if_missing("tables", "source_guid", "text not null default ''")
         self._add_column_if_missing("tables", "data_source_id", "text not null default ''")
+        self._add_column_if_missing("tables", "project_id", "text not null default ''")
+        self._add_column_if_missing("tables", "table_type", "text not null default ''")
+        self._add_column_if_missing("tables", "catalog_name", "text not null default ''")
+        self._add_column_if_missing("tables", "schema_name", "text not null default ''")
+        self._add_column_if_missing("tables", "raw_json", "text not null default '{}'")
         self._add_column_if_missing("tasks", "schedule_time", "text not null default ''")
         self._add_column_if_missing("tasks", "schedule_desc", "text not null default ''")
+        self._seed_cloud_api_catalog()
         self.conn.commit()
+
+    def _seed_cloud_api_catalog(self):
+        for item in TENCENT_CLOUD_API_CATALOG:
+            self.upsert_cloud_api(item, commit=False)
+
+    def upsert_cloud_api(self, item, commit=True):
+        self.conn.execute(
+            """
+            insert into cloud_api_catalog
+                (service, action, provider, product, doc_category, source_url, description, usage, used_by, is_active, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            on conflict(service, action) do update set
+                provider = excluded.provider,
+                product = excluded.product,
+                doc_category = excluded.doc_category,
+                source_url = excluded.source_url,
+                description = excluded.description,
+                usage = excluded.usage,
+                used_by = excluded.used_by,
+                is_active = excluded.is_active,
+                updated_at = excluded.updated_at
+            """,
+            (
+                item["service"],
+                item["action"],
+                item.get("provider", ""),
+                item.get("product", ""),
+                item.get("doc_category", ""),
+                item.get("source_url", ""),
+                item.get("description", ""),
+                item.get("usage", ""),
+                item.get("used_by", ""),
+                1 if item.get("is_active", True) else 0,
+            ),
+        )
+        if commit:
+            self.conn.commit()
+
+    def list_cloud_apis(self, service="", product=""):
+        rows = self._all(
+            """
+            select service, action, provider, product, doc_category, source_url, description, usage, used_by, is_active, updated_at
+            from cloud_api_catalog
+            where (? = '' or service = ?)
+              and (? = '' or product = ?)
+            order by service, action
+            """,
+            (service, service, product, product),
+        )
+        return {"results": [dict(row) for row in rows]}
+
+    def upsert_project(self, item):
+        self.conn.execute(
+            """
+            insert into projects (id, name, display_name, description, owner, status, region, create_time, update_time, raw_json)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(id) do update set
+                name = excluded.name,
+                display_name = excluded.display_name,
+                description = excluded.description,
+                owner = excluded.owner,
+                status = excluded.status,
+                region = excluded.region,
+                create_time = excluded.create_time,
+                update_time = excluded.update_time,
+                raw_json = excluded.raw_json
+            """,
+            (
+                item["id"],
+                item.get("name", ""),
+                item.get("display_name", ""),
+                item.get("description", ""),
+                item.get("owner", ""),
+                item.get("status", ""),
+                item.get("region", ""),
+                item.get("create_time", ""),
+                item.get("update_time", ""),
+                json.dumps(item.get("raw", {}), ensure_ascii=False, sort_keys=True),
+            ),
+        )
+        self.conn.commit()
+
+    def list_projects(self, query=""):
+        like = f"%{query}%"
+        rows = self._all(
+            """
+            select id, name, display_name, description, owner, status, region, create_time, update_time, raw_json
+            from projects
+            where ? = '' or id like ? or name like ? or display_name like ? or owner like ? or status like ?
+            order by name, id
+            limit 200
+            """,
+            (query, like, like, like, like, like),
+        )
+        return {"query": query, "results": [self._project_dict(row) for row in rows]}
+
+    def get_project(self, project_id):
+        row = self._one(
+            """
+            select id, name, display_name, description, owner, status, region, create_time, update_time, raw_json
+            from projects
+            where id = ?
+            """,
+            (project_id,),
+        )
+        if not row:
+            return {"error": "project_not_found", "project_id": project_id}
+        return self._project_dict(row)
+
+    def replace_project_members(self, project_id, members):
+        self.conn.execute("delete from project_members where project_id = ?", (project_id,))
+        for item in members:
+            self.conn.execute(
+                """
+                insert or replace into project_members
+                    (project_id, member_id, member_name, display_name, role_name, role_id, member_type, join_time, raw_json)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    project_id,
+                    item["member_id"],
+                    item.get("member_name", ""),
+                    item.get("display_name", ""),
+                    item.get("role_name", ""),
+                    item.get("role_id", ""),
+                    item.get("member_type", ""),
+                    item.get("join_time", ""),
+                    json.dumps(item.get("raw", {}), ensure_ascii=False, sort_keys=True),
+                ),
+            )
+        self.conn.commit()
+
+    def list_project_members(self, project_id):
+        rows = self._all(
+            """
+            select project_id, member_id, member_name, display_name, role_name, role_id, member_type, join_time, raw_json
+            from project_members
+            where project_id = ?
+            order by role_name, member_name, member_id
+            """,
+            (project_id,),
+        )
+        return {"project_id": project_id, "members": [self._project_member_dict(row) for row in rows]}
+
+    def replace_task_relations(self, project_id, task_id, direction, relations):
+        self.conn.execute(
+            "delete from task_relations where project_id = ? and task_id = ? and direction = ?",
+            (project_id, task_id, direction),
+        )
+        for item in relations:
+            related_task_id = item["related_task_id"]
+            task_name = item.get("task_name", "")
+            related_task_name = item.get("related_task_name", "")
+            self.conn.execute(
+                """
+                insert or replace into task_relations
+                    (project_id, task_id, related_task_id, direction, task_name, related_task_name, dependency_type, owner, status, raw_json)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    project_id,
+                    task_id,
+                    related_task_id,
+                    direction,
+                    task_name,
+                    related_task_name,
+                    item.get("dependency_type", ""),
+                    item.get("owner", ""),
+                    item.get("status", ""),
+                    json.dumps(item.get("raw", {}), ensure_ascii=False, sort_keys=True),
+                ),
+            )
+            self.upsert_task(
+                {
+                    "id": related_task_id,
+                    "name": related_task_name,
+                    "task_type": item.get("task_type", ""),
+                    "owner": item.get("owner", ""),
+                    "status": item.get("status", ""),
+                }
+            )
+        self.conn.commit()
+
+    def list_task_relations(self, project_id, task_id, direction):
+        rows = self._all(
+            """
+            select project_id, task_id, related_task_id, direction, task_name, related_task_name, dependency_type, owner, status, raw_json
+            from task_relations
+            where project_id = ? and task_id = ? and direction = ?
+            order by related_task_name, related_task_id
+            """,
+            (project_id, task_id, direction),
+        )
+        return {"project_id": project_id, "task_id": task_id, "direction": direction, "relations": [self._task_relation_dict(row) for row in rows]}
+
+    def get_table_detail(self, table_name="", table_guid=""):
+        if table_guid:
+            row = self._one(
+                """
+                select name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level,
+                       project_id, table_type, catalog_name, schema_name, raw_json
+                from tables
+                where source_guid = ?
+                """,
+                (table_guid,),
+            )
+        else:
+            row = self._one(
+                """
+                select name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level,
+                       project_id, table_type, catalog_name, schema_name, raw_json
+                from tables
+                where name = ?
+                """,
+                (table_name,),
+            )
+        if not row:
+            return {"error": "table_not_found", "table_name": table_name, "table_guid": table_guid}
+        table = self._table_dict(row)
+        columns = [dict(item) for item in self._all("select name, type, description from columns where table_name = ? order by ordinal, name", (table["name"],))]
+        return {"table": table, "columns": columns}
 
     def upsert_table(self, item):
         self.conn.execute(
             """
-            insert into tables (name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            insert into tables
+                (name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level,
+                 project_id, table_type, catalog_name, schema_name, raw_json)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(name) do update set
                 source_guid = coalesce(nullif(excluded.source_guid, ''), tables.source_guid),
                 data_source_id = coalesce(nullif(excluded.data_source_id, ''), tables.data_source_id),
@@ -163,7 +507,12 @@ class AssetStore:
                 domain = coalesce(nullif(excluded.domain, ''), tables.domain),
                 owner = coalesce(nullif(excluded.owner, ''), tables.owner),
                 description = coalesce(nullif(excluded.description, ''), tables.description),
-                manual_core_level = coalesce(excluded.manual_core_level, tables.manual_core_level)
+                manual_core_level = coalesce(excluded.manual_core_level, tables.manual_core_level),
+                project_id = coalesce(nullif(excluded.project_id, ''), tables.project_id),
+                table_type = coalesce(nullif(excluded.table_type, ''), tables.table_type),
+                catalog_name = coalesce(nullif(excluded.catalog_name, ''), tables.catalog_name),
+                schema_name = coalesce(nullif(excluded.schema_name, ''), tables.schema_name),
+                raw_json = case when excluded.raw_json != '{}' then excluded.raw_json else tables.raw_json end
             """,
             (
                 item["name"],
@@ -175,6 +524,11 @@ class AssetStore:
                 item.get("owner", ""),
                 item.get("description", ""),
                 item.get("manual_core_level"),
+                item.get("project_id", ""),
+                item.get("table_type", ""),
+                item.get("catalog_name", ""),
+                item.get("schema_name", ""),
+                json.dumps(item.get("raw", {}), ensure_ascii=False, sort_keys=True),
             ),
         )
         if item.get("data_source_id"):
@@ -186,7 +540,7 @@ class AssetStore:
                 "contains_table",
                 "wedata_list_table",
                 "high",
-                {"database": item.get("database", ""), "guid": item.get("guid", "")},
+                {"database": item.get("database", ""), "guid": item.get("guid", ""), "project_id": item.get("project_id", "")},
                 commit=False,
             )
         self.conn.commit()
@@ -499,7 +853,7 @@ class AssetStore:
         tables = []
         for table_name in table_names:
             table = self._one(
-                "select name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level from tables where name = ?",
+                "select name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level, project_id, table_type, catalog_name, schema_name, raw_json from tables where name = ?",
                 (table_name,),
             )
             columns = [dict(row) for row in self._all("select name, type, description from columns where table_name = ? order by ordinal, name", (table_name,))]
@@ -527,7 +881,7 @@ class AssetStore:
 
     def list_metadata(self):
         databases = [row["database_name"] for row in self._all("select distinct database_name from tables where database_name != '' order by database_name")]
-        tables = [self._table_dict(row) for row in self._all("select name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level from tables order by database_name, name limit 100")]
+        tables = [self._table_dict(row) for row in self._all("select name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level, project_id, table_type, catalog_name, schema_name, raw_json from tables order by database_name, name limit 100")]
         return {"databases": databases, "tables": tables}
 
     def get_sync_health(self):
@@ -539,6 +893,9 @@ class AssetStore:
             "task_runs": self._count("task_runs"),
             "data_sources": self._count("data_sources"),
             "data_source_tasks": self._count("data_source_tasks"),
+            "projects": self._count("projects"),
+            "project_members": self._count("project_members"),
+            "task_relations": self._count("task_relations"),
             "asset_edges": self._count("asset_edges"),
             "lineage_edges": self._count("lineage"),
             "quality_rules": self._count("quality_rules"),
@@ -565,6 +922,12 @@ class AssetStore:
             gaps.append("未同步任务运行实例")
         if counts["data_sources"] == 0:
             gaps.append("未同步数据源")
+        if counts["projects"] == 0:
+            gaps.append("未同步 WeData 项目列表")
+        if counts["project_members"] == 0:
+            gaps.append("未同步 WeData 项目成员")
+        if counts["task_relations"] == 0:
+            gaps.append("未同步任务上下游依赖")
         return {
             "status": "ok" if counts["tasks"] and not gaps else "partial",
             "counts": counts,
@@ -1628,7 +1991,24 @@ class AssetStore:
 
     def _table_dict(self, row):
         data = dict(row)
-        data["database"] = data.pop("database_name")
+        data["guid"] = data.pop("source_guid", "")
+        data["database"] = data.pop("database_name", "")
+        data["raw"] = _json_dict(data.pop("raw_json", "{}")) if "raw_json" in data else {}
+        return data
+
+    def _project_dict(self, row):
+        data = dict(row)
+        data["raw"] = _json_dict(data.pop("raw_json", "{}"))
+        return data
+
+    def _project_member_dict(self, row):
+        data = dict(row)
+        data["raw"] = _json_dict(data.pop("raw_json", "{}"))
+        return data
+
+    def _task_relation_dict(self, row):
+        data = dict(row)
+        data["raw"] = _json_dict(data.pop("raw_json", "{}"))
         return data
 
     def _data_source_dict(self, row):
@@ -1810,6 +2190,18 @@ class AssetStore:
         if not table.get("data_source_id"):
             gaps.append("缺数据源关联")
         return gaps
+
+
+def _json_dict(value):
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _readiness_points(status):

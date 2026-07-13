@@ -263,6 +263,118 @@ class WeDataImportTest(unittest.TestCase):
         self.assertEqual(partition["storage_bytes"], 456)
         self.assertEqual(partition["file_count"], 7)
 
+
+    def test_maps_projects_members_task_relations_and_table_detail_from_api_dump(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "projects": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "ProjectId": "p1",
+                                    "ProjectName": "prod",
+                                    "DisplayName": "生产项目",
+                                    "Description": "Production project",
+                                    "Owner": "data-platform",
+                                    "Status": "enabled",
+                                    "Region": "ap-guangzhou",
+                                    "CreateTime": "2026-07-01 10:00:00",
+                                    "UpdateTime": "2026-07-02 10:00:00",
+                                }
+                            ]
+                        }
+                    }
+                },
+                "project_members": {
+                    "p1": {
+                        "Response": {
+                            "Data": {
+                                "Items": [
+                                    {
+                                        "UserId": "u1",
+                                        "UserName": "zhangsan",
+                                        "DisplayName": "张三",
+                                        "RoleName": "管理员",
+                                        "RoleId": "r1",
+                                        "MemberType": "user",
+                                        "JoinTime": "2026-07-01 11:00:00",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+                "task_relations": {
+                    "p1:task_001:downstream": {
+                        "Response": {
+                            "Data": {
+                                "Items": [
+                                    {
+                                        "TaskId": "task_002",
+                                        "TaskName": "build_ads_customer",
+                                        "DependencyType": "normal",
+                                        "Owner": "etl-owner",
+                                        "Status": "Y11",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+                "tables": {
+                    "Response": {
+                        "Data": {
+                            "TableName": "ads_customer_revenue_daily",
+                            "Guid": "guid_ads_customer_revenue_daily",
+                            "ProjectId": "p1",
+                            "DatabaseName": "bi",
+                            "TableType": "MANAGED_TABLE",
+                            "CatalogName": "DataLakeCatalog",
+                            "SchemaName": "bi",
+                            "Owner": "data-finance",
+                            "Description": "Revenue table",
+                            "Columns": [{"Name": "customer_id", "Type": "string", "Description": "Customer ID"}],
+                        }
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(snapshot["projects"][0]["id"], "p1")
+        self.assertEqual(snapshot["project_members"][0]["project_id"], "p1")
+        self.assertEqual(snapshot["project_members"][0]["members"][0]["member_id"], "u1")
+        self.assertEqual(snapshot["task_relations"][0]["project_id"], "p1")
+        self.assertEqual(snapshot["task_relations"][0]["relations"][0]["related_task_id"], "task_002")
+        self.assertEqual(snapshot["tables"][0]["project_id"], "p1")
+        self.assertEqual(snapshot["tables"][0]["columns"][0]["name"], "customer_id")
+
+    def test_imports_project_member_and_task_relation_snapshot(self):
+        store = AssetStore(sqlite3.connect(":memory:"))
+        store.init_schema()
+
+        import_wedata_snapshot(
+            store,
+            {
+                "projects": [{"id": "p1", "name": "prod", "display_name": "生产项目"}],
+                "project_members": [
+                    {"project_id": "p1", "members": [{"member_id": "u1", "member_name": "zhangsan", "role_id": "r1"}]}
+                ],
+                "task_relations": [
+                    {
+                        "project_id": "p1",
+                        "task_id": "task_001",
+                        "direction": "upstream",
+                        "relations": [{"related_task_id": "task_000", "related_task_name": "build_ods_customer"}],
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(store.get_project("p1")["display_name"], "生产项目")
+        self.assertEqual(store.list_project_members("p1")["members"][0]["member_id"], "u1")
+        self.assertEqual(store.list_task_relations("p1", "task_001", "upstream")["relations"][0]["related_task_id"], "task_000")
+
     def test_maps_data_sources_from_api_dump(self):
         snapshot = snapshot_from_api_dump(
             {

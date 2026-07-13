@@ -42,6 +42,15 @@ def import_wedata_snapshot(store, snapshot):
     for item in snapshot.get("data_source_tasks", []):
         store.replace_data_source_tasks(item["data_source_id"], item.get("tasks", []))
 
+    for project in snapshot.get("projects", []):
+        store.upsert_project(project)
+
+    for item in snapshot.get("project_members", []):
+        store.replace_project_members(item["project_id"], item.get("members", []))
+
+    for item in snapshot.get("task_relations", []):
+        store.replace_task_relations(item["project_id"], item["task_id"], item["direction"], item.get("relations", []))
+
 
 def snapshot_from_api_dump(dump):
     tasks = [_task_from_api(item) for item in _items(dump.get("tasks", {}))]
@@ -54,6 +63,9 @@ def snapshot_from_api_dump(dump):
         "table_partitions": [_partition_from_api(item) for item in _items(dump.get("table_partitions", {}))],
         "data_sources": data_sources + _builtin_data_sources(tables, data_sources),
         "data_source_tasks": _data_source_tasks_from_dump(dump.get("data_source_tasks", {})),
+        "projects": [_project_from_api(item) for item in _items(dump.get("projects", {}))],
+        "project_members": _project_members_from_dump(dump.get("project_members", {})),
+        "task_relations": _task_relations_from_dump(dump.get("task_relations", {})),
         "lineage": [edge for edge in (_lineage_from_api(item) for item in _items(dump.get("lineage", {}))) if edge["upstream"] and edge["downstream"] and edge["upstream"] != edge["downstream"]],
         "quality_rules": [_quality_rule_from_api(item) for item in _items(dump.get("quality_rules", {}))],
     }
@@ -78,6 +90,11 @@ def _items(response):
         for key in ("Items", "Rows", "List", "Records"):
             if isinstance(data.get(key), list):
                 return data[key]
+        for key in ("Project", "Table", "Detail"):
+            if isinstance(data.get(key), dict):
+                return [data[key]]
+        if any(name in data for name in ("ProjectId", "TableName", "Guid", "Name")):
+            return [data]
     return data if isinstance(data, list) else []
 
 
@@ -103,7 +120,12 @@ def _table_from_api(item):
         "domain": _get(item, "Domain", "BizDomain", "domain", default=_domain_from_tokens(name.lower().split("_"))),
         "owner": _get(item, "Owner", "OwnerName", "ResponsibleUser", "owner", default=metadata.get("Owner") or ""),
         "description": _get(item, "Description", "Comment", "description"),
+        "project_id": str(_get(item, "ProjectId", "ProjectID", "projectId", default="")),
+        "table_type": _get(item, "TableType", "Type", "TableKind", "tableType"),
+        "catalog_name": _get(item, "CatalogName", "Catalog", "catalogName"),
+        "schema_name": _get(item, "SchemaName", "Schema", "schemaName", default=database),
         "columns": [_column_from_api(column) for column in _get(item, "Columns", "ColumnList", "columns", default=[])],
+        "raw": item,
     }
 
 
@@ -423,6 +445,83 @@ def _data_source_from_api(item):
         "owner": _get(item, "Owner", "OwnerName", "OwnerUin", "CreateUser", "owner"),
         "description": _get(item, "Description", "Remark", "Comment", "description"),
         "config": config,
+    }
+
+
+def _project_from_api(item):
+    project_id = str(_get(item, "ProjectId", "Id", "id"))
+    return {
+        "id": project_id,
+        "name": _get(item, "ProjectName", "Name", "name"),
+        "display_name": _get(item, "DisplayName", "Display", "Name", "ProjectName", "name"),
+        "description": _get(item, "Description", "Desc", "description"),
+        "owner": str(_get(item, "Owner", "OwnerName", "CreateUser", "Creator", "AdminUser", "owner")),
+        "status": str(_get(item, "Status", "State", "ProjectStatus", "status")),
+        "region": _get(item, "Region", "RegionId", "Area", "region"),
+        "create_time": _get(item, "CreateTime", "CreatedAt", "CreateDate", "createTime"),
+        "update_time": _get(item, "UpdateTime", "UpdatedAt", "ModifyTime", "updateTime"),
+        "raw": item,
+    }
+
+
+def _project_members_from_dump(value):
+    if not isinstance(value, dict):
+        return []
+    results = []
+    for project_id, response in value.items():
+        members = [_project_member_from_api(item) for item in _items(response)]
+        results.append({"project_id": str(project_id), "members": members})
+    return results
+
+
+def _project_member_from_api(item):
+    member_id = str(_get(item, "MemberId", "UserId", "UserUin", "Uin", "Id", "id"))
+    role_id = str(_get(item, "RoleId", "ProjectRoleId", "roleId", default=""))
+    if not role_id:
+        role_id = _get(item, "RoleName", "ProjectRoleName", "roleName", default="")
+    return {
+        "member_id": member_id,
+        "member_name": _get(item, "MemberName", "UserName", "Name", "UserAlias", "name"),
+        "display_name": _get(item, "DisplayName", "NickName", "UserDisplayName", "UserName", "Name"),
+        "role_name": _get(item, "RoleName", "ProjectRoleName", "roleName"),
+        "role_id": str(role_id),
+        "member_type": _get(item, "MemberType", "UserType", "Type", "type"),
+        "join_time": _get(item, "JoinTime", "CreateTime", "CreatedAt", "createTime"),
+        "raw": item,
+    }
+
+
+def _task_relations_from_dump(value):
+    if not isinstance(value, dict):
+        return []
+    results = []
+    for key, response in value.items():
+        parts = str(key).split(":", 2)
+        if len(parts) != 3:
+            continue
+        project_id, task_id, direction = parts
+        results.append(
+            {
+                "project_id": project_id,
+                "task_id": task_id,
+                "direction": direction,
+                "relations": [_task_relation_from_api(item, task_id) for item in _items(response)],
+            }
+        )
+    return results
+
+
+def _task_relation_from_api(item, source_task_id):
+    related_task_id = str(_get(item, "TaskId", "RelatedTaskId", "Id", "id"))
+    return {
+        "related_task_id": related_task_id,
+        "task_name": _get(item, "SourceTaskName", "CurrentTaskName", default=""),
+        "related_task_name": _get(item, "TaskName", "RelatedTaskName", "Name", "name"),
+        "dependency_type": _get(item, "DependencyType", "Dependency", "Type", "type"),
+        "task_type": str(_get(item, "TaskType", "TaskTypeId", "type", default="")),
+        "owner": str(_get(item, "Owner", "OwnerName", "ResponsibleUser", "owner")),
+        "status": str(_get(item, "Status", "State", "TaskLatestVersionStatus", "status")),
+        "raw": item,
     }
 
 

@@ -69,6 +69,45 @@ class LiveWeData:
             payload["tasks"] = _merge_task_responses({}, task_definitions)
         self._import(payload)
 
+    def project_id_or_default(self, project_id=""):
+        value = project_id or self.project_id
+        if not value:
+            raise RuntimeError("missing_project_id")
+        return value
+
+    def sync_projects(self, query=""):
+        payload = {}
+        if query:
+            payload["Keyword"] = query
+        data = self._list_all("ListProjects", payload)
+        self._import({"projects": data})
+
+    def sync_project(self, project_id=""):
+        resolved_project_id = self.project_id_or_default(project_id)
+        data = self.client.call("GetProject", {"ProjectId": resolved_project_id})
+        self._import({"projects": data})
+
+    def sync_project_members(self, project_id=""):
+        resolved_project_id = self.project_id_or_default(project_id)
+        data = self._list_all("ListProjectMembers", {"ProjectId": resolved_project_id})
+        self._import({"project_members": {resolved_project_id: data}})
+
+    def sync_task_relations(self, task_id, direction, project_id=""):
+        resolved_project_id = self.project_id_or_default(project_id)
+        action = "ListDownstreamTasks" if direction == "downstream" else "ListUpstreamTasks"
+        data = self._list_all(action, {"ProjectId": resolved_project_id, "TaskId": task_id})
+        self._import({"task_relations": {f"{resolved_project_id}:{task_id}:{direction}": data}})
+
+    def sync_table_detail(self, table_name="", table_guid="", project_id=""):
+        resolved_project_id = self.project_id_or_default(project_id)
+        payload = {"ProjectId": resolved_project_id}
+        if table_guid:
+            payload["TableGuid"] = table_guid
+        if table_name:
+            payload["TableName"] = table_name
+        data = self.client.call("GetTable", payload)
+        self._import({"tables": data})
+
     def _list_all(self, action, payload, max_pages=None):
         first = self.client.call(action, {**payload, "PageNumber": 1, "PageSize": self.page_size})
         if "Error" in first.get("Response", {}):

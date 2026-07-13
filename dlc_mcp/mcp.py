@@ -1,4 +1,5 @@
 import json
+import os
 
 
 TOOLS = {
@@ -142,6 +143,30 @@ TOOLS = {
     "list_expert_review_queue": {
         "description": "List high-impact tables that need expert labeling.",
         "schema": {"type": "object", "properties": {"layer": {"type": "string"}, "limit": {"type": "integer"}}},
+    },
+    "list_projects": {
+        "description": "List WeData projects cached from Tencent Cloud ListProjects.",
+        "schema": {"type": "object", "properties": {"query": {"type": "string"}, "live": {"type": "boolean"}}},
+    },
+    "get_project": {
+        "description": "Return one WeData project by project_id, defaulting to WEDATA_PROJECT_ID.",
+        "schema": {"type": "object", "properties": {"project_id": {"type": "string"}, "live": {"type": "boolean"}}},
+    },
+    "list_project_members": {
+        "description": "List members and roles for a WeData project, defaulting to WEDATA_PROJECT_ID.",
+        "schema": {"type": "object", "properties": {"project_id": {"type": "string"}, "live": {"type": "boolean"}}},
+    },
+    "list_downstream_tasks": {
+        "description": "List downstream WeData tasks for a task id.",
+        "schema": {"type": "object", "properties": {"task_id": {"type": "string"}, "project_id": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["task_id"]},
+    },
+    "list_upstream_tasks": {
+        "description": "List upstream WeData tasks for a task id.",
+        "schema": {"type": "object", "properties": {"task_id": {"type": "string"}, "project_id": {"type": "string"}, "live": {"type": "boolean"}}, "required": ["task_id"]},
+    },
+    "get_table": {
+        "description": "Return Tencent Cloud WeData table metadata detail by table_name or table_guid.",
+        "schema": {"type": "object", "properties": {"table_name": {"type": "string"}, "table_guid": {"type": "string"}, "project_id": {"type": "string"}, "live": {"type": "boolean"}}},
     },
     "list_metadata": {
         "description": "List imported databases and table metadata.",
@@ -344,6 +369,64 @@ def _call_tool(store, request, live=None):
         data = store.get_expert_label(args.get("asset_type", "table"), args["asset_name"])
     elif name == "list_expert_review_queue":
         data = store.list_expert_review_queue(args.get("layer", ""), args.get("limit", 50))
+    elif name == "list_projects":
+        data = store.list_projects(args.get("query", ""))
+        if live and (args.get("live") or not data.get("results")):
+            live.sync_projects(args.get("query", ""))
+            data = store.list_projects(args.get("query", ""))
+    elif name == "get_project":
+        project_id = _project_id_arg(args)
+        if not project_id:
+            data = _error_data("missing_project_id")
+        else:
+            data = store.get_project(project_id)
+            if live and (args.get("live") or data.get("error")):
+                live.sync_project(project_id)
+                data = store.get_project(project_id)
+    elif name == "list_project_members":
+        project_id = _project_id_arg(args)
+        if not project_id:
+            data = _error_data("missing_project_id")
+        else:
+            data = store.list_project_members(project_id)
+            if live and (args.get("live") or not data.get("members")):
+                live.sync_project_members(project_id)
+                data = store.list_project_members(project_id)
+    elif name == "list_downstream_tasks":
+        project_id = _project_id_arg(args)
+        if not project_id:
+            data = _error_data("missing_project_id")
+        else:
+            data = store.list_task_relations(project_id, args["task_id"], "downstream")
+            if live and (args.get("live") or not data.get("relations")):
+                live.sync_task_relations(args["task_id"], "downstream", project_id)
+                data = store.list_task_relations(project_id, args["task_id"], "downstream")
+    elif name == "list_upstream_tasks":
+        project_id = _project_id_arg(args)
+        if not project_id:
+            data = _error_data("missing_project_id")
+        else:
+            data = store.list_task_relations(project_id, args["task_id"], "upstream")
+            if live and (args.get("live") or not data.get("relations")):
+                live.sync_task_relations(args["task_id"], "upstream", project_id)
+                data = store.list_task_relations(project_id, args["task_id"], "upstream")
+    elif name == "get_table":
+        table_name = args.get("table_name", "")
+        table_guid = args.get("table_guid", "")
+        project_id = _project_id_arg(args)
+        if not table_name and not table_guid:
+            data = _error_data("missing_table_identity")
+        elif not project_id:
+            data = _error_data("missing_project_id")
+        else:
+            data = store.get_table_detail(table_name, table_guid)
+            cached_guid = table_guid or (data.get("table") or {}).get("guid", "")
+            if live and args.get("live"):
+                if cached_guid or table_name:
+                    live.sync_table_detail(table_name=table_name, table_guid=cached_guid, project_id=project_id)
+                    data = store.get_table_detail(table_name, cached_guid)
+                else:
+                    data = _error_data("table_guid_required", table_name=table_name)
     elif name == "list_metadata":
         data = store.list_metadata()
     elif name == "get_sync_health":
@@ -374,10 +457,70 @@ def _result(request, result):
 def _error(request, code, message):
     return {"jsonrpc": "2.0", "id": request.get("id"), "error": {"code": code, "message": message}}
 
+def _project_id_arg(args):
+    return args.get("project_id") or os.environ.get("WEDATA_PROJECT_ID", "")
+
+
+def _error_data(error, **fields):
+    return {"error": error, **fields}
+
 
 def _format_markdown(tool_name, data):
     if isinstance(data, dict) and data.get("error"):
         return f"**未找到**\n\n- 错误：`{_cell(data['error'])}`\n" + "\n".join(f"- {k}: `{_cell(v)}`" for k, v in data.items() if k != "error")
+    if tool_name == "list_projects":
+        rows = data.get("results", [])
+        return _section("项目列表", [f"查询：`{_cell(data.get('query', ''))}`", f"数量：{len(rows)}"]) + "\n\n" + _table(
+            ["项目ID", "名称", "展示名", "负责人", "状态", "区域", "创建时间", "更新时间"],
+            [[r.get("id"), r.get("name"), r.get("display_name"), r.get("owner"), r.get("status"), r.get("region"), r.get("create_time"), r.get("update_time")] for r in rows],
+        )
+    if tool_name == "get_project":
+        return _section(
+            "项目详情",
+            [
+                f"项目ID：`{_cell(data.get('id'))}`",
+                f"名称：**{_cell(data.get('name'))}**",
+                f"展示名：{_cell(data.get('display_name'))}",
+                f"负责人：`{_cell(data.get('owner'))}`",
+                f"状态：`{_cell(data.get('status'))}`",
+                f"区域：`{_cell(data.get('region'))}`",
+                f"创建时间：{_cell(data.get('create_time'))}",
+                f"更新时间：{_cell(data.get('update_time'))}",
+                f"描述：{_cell(data.get('description'))}",
+            ],
+        )
+    if tool_name == "list_project_members":
+        rows = data.get("members", [])
+        return _section("项目成员", [f"项目ID：`{_cell(data.get('project_id'))}`", f"成员数：{len(rows)}"]) + "\n\n" + _table(
+            ["成员ID", "账号", "展示名", "角色", "角色ID", "类型", "加入时间"],
+            [[r.get("member_id"), r.get("member_name"), r.get("display_name"), r.get("role_name"), r.get("role_id"), r.get("member_type"), r.get("join_time")] for r in rows],
+        )
+    if tool_name in {"list_downstream_tasks", "list_upstream_tasks"}:
+        rows = data.get("relations", [])
+        title = "下游任务" if tool_name == "list_downstream_tasks" else "上游任务"
+        return _section(title, [f"项目ID：`{_cell(data.get('project_id'))}`", f"TaskId：`{_cell(data.get('task_id'))}`", f"任务数：{len(rows)}"]) + "\n\n" + _table(
+            ["相关TaskId", "任务名", "依赖类型", "负责人", "状态"],
+            [[r.get("related_task_id"), r.get("related_task_name"), r.get("dependency_type"), r.get("owner"), r.get("status")] for r in rows],
+        )
+    if tool_name == "get_table":
+        table = data.get("table", {})
+        columns = data.get("columns", [])
+        return _section(
+            "表元数据详情",
+            [
+                f"表名：**{_cell(table.get('name'))}**",
+                f"GUID：`{_cell(table.get('guid'))}`",
+                f"项目ID：`{_cell(table.get('project_id'))}`",
+                f"库：`{_cell(table.get('database'))}`",
+                f"Catalog：`{_cell(table.get('catalog_name'))}`",
+                f"Schema：`{_cell(table.get('schema_name'))}`",
+                f"类型：`{_cell(table.get('table_type'))}`",
+                f"数据源：`{_cell(table.get('data_source_id'))}`",
+                f"负责人：`{_cell(table.get('owner'))}`",
+                f"描述：{_cell(table.get('description'))}",
+                f"字段数：{len(columns)}",
+            ],
+        ) + "\n\n" + _table(["字段名", "类型", "说明"], [[c.get("name"), c.get("type"), c.get("description")] for c in columns[:20]])
     if tool_name == "list_data_sources":
         rows = data.get("results", [])
         return _section("数据源列表", [f"查询：`{_cell(data.get('query', ''))}`", f"数量：{len(rows)}"]) + "\n\n" + _table(

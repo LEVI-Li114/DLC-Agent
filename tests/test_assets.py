@@ -88,6 +88,114 @@ class AssetStoreTest(unittest.TestCase):
     def test_unknown_table_returns_not_found(self):
         self.assertEqual(make_store().get_table_profile("missing")["error"], "table_not_found")
 
+
+    def test_cloud_api_catalog_includes_project_task_relation_and_get_table_apis(self):
+        apis = make_store().list_cloud_apis(service="wedata")["results"]
+        by_action = {api["action"]: api for api in apis}
+
+        self.assertEqual(by_action["ListProjects"]["doc_category"], "项目管理相关接口")
+        self.assertEqual(by_action["GetProject"]["doc_category"], "项目管理相关接口")
+        self.assertEqual(by_action["ListProjectMembers"]["doc_category"], "项目管理相关接口")
+        self.assertEqual(by_action["ListDownstreamTasks"]["doc_category"], "数据开发相关接口")
+        self.assertEqual(by_action["ListUpstreamTasks"]["doc_category"], "数据开发相关接口")
+        self.assertEqual(by_action["GetTable"]["doc_category"], "元数据相关接口")
+
+    def test_project_cache_round_trip_and_query(self):
+        store = make_store()
+        store.upsert_project(
+            {
+                "id": "p1",
+                "name": "prod",
+                "display_name": "生产项目",
+                "description": "Production project",
+                "owner": "data-platform",
+                "status": "enabled",
+                "region": "ap-guangzhou",
+                "create_time": "2026-07-01 10:00:00",
+                "update_time": "2026-07-02 10:00:00",
+                "raw": {"ProjectId": "p1"},
+            }
+        )
+
+        project = store.get_project("p1")
+        self.assertEqual(project["name"], "prod")
+        self.assertEqual(project["display_name"], "生产项目")
+        self.assertEqual(project["raw"]["ProjectId"], "p1")
+        self.assertEqual(store.list_projects("生产")["results"][0]["id"], "p1")
+
+    def test_project_member_cache_replaces_one_project(self):
+        store = make_store()
+        store.replace_project_members(
+            "p1",
+            [
+                {
+                    "member_id": "u1",
+                    "member_name": "zhangsan",
+                    "display_name": "张三",
+                    "role_name": "管理员",
+                    "role_id": "r1",
+                    "member_type": "user",
+                    "join_time": "2026-07-01 11:00:00",
+                    "raw": {"UserId": "u1"},
+                }
+            ],
+        )
+        store.replace_project_members("p2", [{"member_id": "u2", "member_name": "lisi", "role_id": "r2"}])
+        store.replace_project_members("p1", [{"member_id": "u3", "member_name": "wangwu", "role_id": "r3"}])
+
+        members = store.list_project_members("p1")
+        self.assertEqual([member["member_id"] for member in members["members"]], ["u3"])
+        self.assertEqual(store.list_project_members("p2")["members"][0]["member_id"], "u2")
+
+    def test_task_relation_cache_replaces_by_project_task_and_direction(self):
+        store = make_store()
+        store.replace_task_relations(
+            "p1",
+            "task_001",
+            "downstream",
+            [
+                {
+                    "related_task_id": "task_002",
+                    "task_name": "build_dim_customer",
+                    "related_task_name": "build_ads_customer",
+                    "dependency_type": "normal",
+                    "owner": "etl-owner",
+                    "status": "Y11",
+                    "raw": {"TaskId": "task_002"},
+                }
+            ],
+        )
+
+        relations = store.list_task_relations("p1", "task_001", "downstream")
+        self.assertEqual(relations["relations"][0]["related_task_id"], "task_002")
+        self.assertEqual(relations["relations"][0]["related_task_name"], "build_ads_customer")
+        self.assertEqual(store.get_task("task_002")["name"], "build_ads_customer")
+
+    def test_table_detail_fields_are_cached(self):
+        store = make_store()
+        store.upsert_table(
+            {
+                "name": "ads_order_daily",
+                "guid": "guid_ads_order_daily",
+                "project_id": "p1",
+                "database": "bi",
+                "table_type": "MANAGED_TABLE",
+                "catalog_name": "DataLakeCatalog",
+                "schema_name": "bi",
+                "owner": "data-finance",
+                "description": "Order daily summary",
+                "raw": {"TableName": "ads_order_daily"},
+            }
+        )
+
+        detail = store.get_table_detail(table_name="ads_order_daily")
+        self.assertEqual(detail["table"]["project_id"], "p1")
+        self.assertEqual(detail["table"]["table_type"], "MANAGED_TABLE")
+        self.assertEqual(detail["table"]["catalog_name"], "DataLakeCatalog")
+        self.assertEqual(detail["table"]["schema_name"], "bi")
+        self.assertEqual(detail["table"]["raw"]["TableName"], "ads_order_daily")
+        self.assertEqual(store.get_table_detail(table_guid="guid_ads_order_daily")["table"]["name"], "ads_order_daily")
+
     def test_data_source_includes_owner_name_and_task_count(self):
         source = make_store().get_data_source("ds_001")
 

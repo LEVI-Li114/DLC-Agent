@@ -14,6 +14,18 @@ class FakeWeDataClient:
 
     def call(self, action, payload):
         self.calls.append((action, dict(payload)))
+        if action == "ListProjects":
+            return {"Response": {"Data": {"Items": [{"ProjectId": "project", "ProjectName": "prod", "Owner": "data-platform"}], "TotalPageNumber": 1}}}
+        if action == "GetProject":
+            return {"Response": {"Data": {"ProjectId": payload.get("ProjectId"), "ProjectName": "prod", "Owner": "data-platform", "Status": "enabled"}}}
+        if action == "ListProjectMembers":
+            return {"Response": {"Data": {"Items": [{"UserId": "u1", "UserName": "zhangsan", "RoleName": "管理员"}], "TotalPageNumber": 1}}}
+        if action == "ListDownstreamTasks":
+            return {"Response": {"Data": {"Items": [{"TaskId": "task_down", "TaskName": "downstream_task"}], "TotalPageNumber": 1}}}
+        if action == "ListUpstreamTasks":
+            return {"Response": {"Data": {"Items": [{"TaskId": "task_up", "TaskName": "upstream_task"}], "TotalPageNumber": 1}}}
+        if action == "GetTable":
+            return {"Response": {"Data": {"Guid": payload.get("TableGuid", "guid_dim_customer"), "TableName": "dim_customer", "ProjectId": payload.get("ProjectId", "project"), "DatabaseName": "dw", "Owner": "data-customer"}}}
         if action == "ListDataSources":
             return {"Response": {"Data": {"Items": [{"Id": 57738, "Name": "crm_fxiaoke_tx", "Type": "MYSQL"}], "TotalPageNumber": 1}}}
         if action == "GetDataSourceRelatedTasks":
@@ -153,6 +165,67 @@ class McpTest(unittest.TestCase):
         self.store.upsert_column("m2c_ods_crm_payment_plan_df", "id", "bigint", "Primary key", 1)
         self.store.upsert_expert_label({"asset_name": "dim_customer", "core_level": "P1", "value_tier": "重要", "domain": "客户", "use_case": "客户分析"})
 
+    def test_calls_project_tools_from_cache(self):
+        self.store.upsert_project({"id": "project", "name": "prod", "display_name": "生产项目", "owner": "data-platform", "status": "enabled"})
+        self.store.replace_project_members("project", [{"member_id": "u1", "member_name": "zhangsan", "role_name": "管理员", "role_id": "r1"}])
+
+        list_response = handle_request(self.store, {"jsonrpc": "2.0", "id": 31, "method": "tools/call", "params": {"name": "list_projects", "arguments": {"query": "生产"}}})
+        get_response = handle_request(self.store, {"jsonrpc": "2.0", "id": 32, "method": "tools/call", "params": {"name": "get_project", "arguments": {"project_id": "project"}}})
+        members_response = handle_request(self.store, {"jsonrpc": "2.0", "id": 33, "method": "tools/call", "params": {"name": "list_project_members", "arguments": {"project_id": "project"}}})
+
+        self.assertIn("项目列表", list_response["result"]["content"][0]["text"])
+        self.assertIn("生产项目", list_response["result"]["content"][0]["text"])
+        self.assertIn("项目详情", get_response["result"]["content"][0]["text"])
+        self.assertIn("data-platform", get_response["result"]["content"][0]["text"])
+        self.assertIn("项目成员", members_response["result"]["content"][0]["text"])
+        self.assertIn("zhangsan", members_response["result"]["content"][0]["text"])
+
+    def test_calls_task_relation_and_get_table_tools_from_cache(self):
+        self.store.replace_task_relations("project", "task_001", "downstream", [{"related_task_id": "task_002", "related_task_name": "build_ads_customer"}])
+        self.store.replace_task_relations("project", "task_001", "upstream", [{"related_task_id": "task_000", "related_task_name": "build_ods_customer"}])
+        self.store.upsert_table({"name": "dim_customer", "guid": "guid_dim_customer", "project_id": "project", "database": "dw", "owner": "data-customer", "table_type": "MANAGED_TABLE"})
+
+        downstream = handle_request(self.store, {"jsonrpc": "2.0", "id": 34, "method": "tools/call", "params": {"name": "list_downstream_tasks", "arguments": {"project_id": "project", "task_id": "task_001"}}})
+        upstream = handle_request(self.store, {"jsonrpc": "2.0", "id": 35, "method": "tools/call", "params": {"name": "list_upstream_tasks", "arguments": {"project_id": "project", "task_id": "task_001"}}})
+        table = handle_request(self.store, {"jsonrpc": "2.0", "id": 36, "method": "tools/call", "params": {"name": "get_table", "arguments": {"table_name": "dim_customer", "project_id": "project"}}})
+
+        self.assertIn("下游任务", downstream["result"]["content"][0]["text"])
+        self.assertIn("task_002", downstream["result"]["content"][0]["text"])
+        self.assertIn("上游任务", upstream["result"]["content"][0]["text"])
+        self.assertIn("task_000", upstream["result"]["content"][0]["text"])
+        self.assertIn("表元数据详情", table["result"]["content"][0]["text"])
+        self.assertIn("dim_customer", table["result"]["content"][0]["text"])
+
+    def test_new_tools_return_readable_validation_errors(self):
+        with patch.dict(os.environ, {}, clear=True):
+            project = handle_request(self.store, {"jsonrpc": "2.0", "id": 37, "method": "tools/call", "params": {"name": "get_project", "arguments": {}}})
+        table = handle_request(self.store, {"jsonrpc": "2.0", "id": 38, "method": "tools/call", "params": {"name": "get_table", "arguments": {}}})
+
+        self.assertIn("missing_project_id", project["result"]["content"][0]["text"])
+        self.assertIn("missing_table_identity", table["result"]["content"][0]["text"])
+
+    def test_live_wedata_syncs_new_api_families_with_default_project_id(self):
+        client = FakeWeDataClient()
+        with patch.dict(os.environ, {"WEDATA_PROJECT_ID": "project"}, clear=False):
+            live = LiveWeData(self.store, client=client)
+            live.sync_projects()
+            live.sync_project()
+            live.sync_project_members()
+            live.sync_task_relations("task_001", "downstream")
+            live.sync_task_relations("task_001", "upstream")
+            live.sync_table_detail(table_guid="guid_dim_customer")
+
+        actions = [action for action, payload in client.calls]
+        self.assertIn("ListProjects", actions)
+        self.assertIn("GetProject", actions)
+        self.assertIn("ListProjectMembers", actions)
+        self.assertIn("ListDownstreamTasks", actions)
+        self.assertIn("ListUpstreamTasks", actions)
+        self.assertIn("GetTable", actions)
+        self.assertEqual(self.store.get_project("project")["name"], "prod")
+        self.assertEqual(self.store.list_project_members("project")["members"][0]["member_id"], "u1")
+        self.assertEqual(self.store.list_task_relations("project", "task_001", "downstream")["relations"][0]["related_task_id"], "task_down")
+
     def test_lists_tools(self):
         response = handle_request(self.store, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
 
@@ -182,6 +255,12 @@ class McpTest(unittest.TestCase):
         self.assertIn("get_asset_coverage", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("list_asset_coverage_gaps", [tool["name"] for tool in response["result"]["tools"]])
         self.assertIn("get_asset_governance_daily_report", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("list_projects", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("get_project", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("list_project_members", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("list_downstream_tasks", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("list_upstream_tasks", [tool["name"] for tool in response["result"]["tools"]])
+        self.assertIn("get_table", [tool["name"] for tool in response["result"]["tools"]])
 
     def test_calls_table_profile_tool(self):
         response = handle_request(
