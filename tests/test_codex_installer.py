@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import tempfile
@@ -15,9 +16,14 @@ class CodexInstallerTest(unittest.TestCase):
             self.run_installer(home)
 
             text = config.read_text(encoding="utf-8")
+            package = json.loads((Path(__file__).resolve().parents[1] / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(text.count("[mcp_servers.dlc-mcp]"), 1)
             self.assertIn('command = "npx"', text)
-            self.assertIn('args = ["-y", "@levisli/dlc-mcp"]', text)
+            self.assertIn(
+                f'args = ["--yes", "--prefix", "{tempfile.gettempdir()}", '
+                f'"@levisli/dlc-mcp@{package["version"]}"]',
+                text,
+            )
             self.assertIn('type = "stdio"', text)
 
     def test_install_codex_replaces_existing_block(self):

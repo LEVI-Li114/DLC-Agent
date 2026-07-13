@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 
 const fs = require("node:fs");
+const http = require("node:http");
+const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 
-const defaultGatewayUrl = "http://64.186.234.87:8787/mcp";
+const packageVersion = require("../package.json").version;
+const defaultGatewayUrl = "https://64.186.234.87/mcp";
 const gatewayUrl = process.env.DLC_MCP_GATEWAY_URL || defaultGatewayUrl;
 const gatewayToken = process.env.DLC_MCP_GATEWAY_TOKEN || "";
+const gatewayCaPath = process.env.DLC_MCP_GATEWAY_CA || path.join(__dirname, "..", "certs", "dlc-mcp-gateway.crt");
 
 if (process.argv[2] === "install-codex") {
   installCodex();
@@ -31,18 +35,37 @@ function runGatewayClient(url) {
 
 async function postMcp(url, line) {
   try {
-    const headers = { "content-type": "application/json" };
+    const headers = {
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+    };
     if (gatewayToken) headers.authorization = `Bearer ${gatewayToken}`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: line,
-    });
-    const text = await response.text();
+    const text = await postJson(url, headers, line);
     if (text.trim()) process.stdout.write(text.trim() + "\n");
   } catch (error) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32000, message: String(error.message || error) } }) + "\n");
   }
+}
+
+function postJson(url, headers, body) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const transport = target.protocol === "https:" ? https : http;
+    const options = { method: "POST", headers };
+    if (target.protocol === "https:" && fs.existsSync(gatewayCaPath)) {
+      options.ca = fs.readFileSync(gatewayCaPath);
+    }
+    const request = transport.request(target, options, (response) => {
+      let text = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        text += chunk;
+      });
+      response.on("end", () => resolve(text));
+    });
+    request.on("error", reject);
+    request.end(body);
+  });
 }
 
 function installCodex() {
@@ -59,7 +82,7 @@ function installCodex() {
 function codexBlock() {
   let block = `[mcp_servers.dlc-mcp]
 command = "npx"
-args = ["-y", "@levisli/dlc-mcp"]
+args = ["--yes", "--prefix", ${JSON.stringify(os.tmpdir())}, "@levisli/dlc-mcp@${packageVersion}"]
 type = "stdio"
 `;
   block += `

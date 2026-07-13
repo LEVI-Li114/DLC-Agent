@@ -13,21 +13,23 @@ DLC_MCP_GATEWAY_TOKEN=your-token npx -y @levisli/dlc-mcp install-codex
 If the Gateway URL is not the default:
 
 ```bash
-DLC_MCP_GATEWAY_URL=http://64.186.234.87:8787/mcp \
+DLC_MCP_GATEWAY_URL=https://64.186.234.87/mcp \
 DLC_MCP_GATEWAY_TOKEN=your-token \
   npx -y @levisli/dlc-mcp install-codex
 ```
 
 The installer writes this Codex config:
 
+> **Local development note:** if you run plain `npx` from the `@levisli/dlc-mcp` source checkout itself, npm may resolve the current package instead of the published package. The generated config uses `--prefix` with the system temporary directory to avoid that collision.
+
 ```toml
 [mcp_servers.dlc-mcp]
 command = "npx"
-args = ["-y", "@levisli/dlc-mcp"]
+args = ["--yes", "--prefix", "/private/tmp", "@levisli/dlc-mcp@0.1.9"]
 type = "stdio"
 
 [mcp_servers.dlc-mcp.env]
-DLC_MCP_GATEWAY_URL = "http://64.186.234.87:8787/mcp"
+DLC_MCP_GATEWAY_URL = "https://64.186.234.87/mcp"
 DLC_MCP_GATEWAY_TOKEN = "your-token"
 ```
 

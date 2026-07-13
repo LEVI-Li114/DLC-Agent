@@ -231,12 +231,12 @@ printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"g
 
 ## 8. Smoke Test HTTP Gateway From A User Laptop
 
-The user laptop only needs network access to the Gateway.
+The user laptop only needs HTTPS access to the Gateway. Nginx terminates TLS with `deploy/nginx-dlc-mcp.conf`; the Python Gateway remains bound to `127.0.0.1:8787`.
 
 ```bash
-curl -s http://64.186.234.87:8787/health
+curl --cacert certs/dlc-mcp-gateway.crt -s https://64.186.234.87/health
 
-curl -s http://64.186.234.87:8787/mcp \
+curl --cacert certs/dlc-mcp-gateway.crt -s https://64.186.234.87/mcp \
   -H 'content-type: application/json' \
   -H 'authorization: Bearer your-token' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -255,7 +255,7 @@ DLC_MCP_GATEWAY_TOKEN=your-token npx -y @levisli/dlc-mcp install-codex
 If the Gateway URL is different:
 
 ```bash
-DLC_MCP_GATEWAY_URL=http://64.186.234.87:8787/mcp \
+DLC_MCP_GATEWAY_URL=https://64.186.234.87/mcp \
 DLC_MCP_GATEWAY_TOKEN=your-token \
   npx -y @levisli/dlc-mcp install-codex
 ```

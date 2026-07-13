@@ -5,7 +5,7 @@
 ## 接入链路
 
 ```text
-Codex -> npx @levisli/dlc-mcp -> HTTP Gateway -> DLC-MCP 服务端 -> assets.db / WeData
+Codex -> npx @levisli/dlc-mcp -> HTTPS Gateway -> DLC-MCP 服务端 -> assets.db / WeData
 ```
 
 普通用户只需要：
@@ -78,7 +78,7 @@ curl -s http://64.186.234.87:8787/health
 MCP 请求需要 token：
 
 ```bash
-curl -s http://64.186.234.87:8787/mcp \
+curl --cacert certs/dlc-mcp-gateway.crt -s https://64.186.234.87/mcp \
   -H 'content-type: application/json' \
   -H 'authorization: Bearer replace-with-random-token' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -106,14 +106,14 @@ DLC_MCP_GATEWAY_TOKEN=你发给他的token \
 
 ```toml
 [mcp_servers.dlc-mcp.env]
-DLC_MCP_GATEWAY_URL = "http://64.186.234.87:8787/mcp"
+DLC_MCP_GATEWAY_URL = "https://64.186.234.87/mcp"
 DLC_MCP_GATEWAY_TOKEN = "..."
 ```
 
 如果 Gateway URL 不是默认值，同时传：
 
 ```bash
-DLC_MCP_GATEWAY_URL=http://64.186.234.87:8787/mcp \
+DLC_MCP_GATEWAY_URL=https://64.186.234.87/mcp \
 DLC_MCP_GATEWAY_TOKEN=replace-with-random-token \
   npx -y @levisli/dlc-mcp install-codex
 ```
@@ -123,13 +123,15 @@ DLC_MCP_GATEWAY_TOKEN=replace-with-random-token \
 ```toml
 [mcp_servers.dlc-mcp]
 command = "npx"
-args = ["-y", "@levisli/dlc-mcp"]
+args = ["--yes", "--prefix", "/private/tmp", "@levisli/dlc-mcp@0.1.9"]
 type = "stdio"
 
 [mcp_servers.dlc-mcp.env]
-DLC_MCP_GATEWAY_URL = "http://64.186.234.87:8787/mcp"
+DLC_MCP_GATEWAY_URL = "https://64.186.234.87/mcp"
 DLC_MCP_GATEWAY_TOKEN = "replace-with-random-token"
 ```
+
+`--prefix /private/tmp` 用于避免在 `DLC-Agent` 源码目录中启动时，npm 把当前同名项目误认为已经安装的发布包，进而报 `dlc-mcp: command not found`。
 
 然后重启 Codex。
 

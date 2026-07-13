@@ -66,7 +66,7 @@ DLC_MCP_GATEWAY_TOKEN=your-token npx -y @levisli/dlc-mcp install-codex
 - 如需指定 Gateway：
 
 ```bash
-DLC_MCP_GATEWAY_URL=http://64.186.234.87:8787/mcp \
+DLC_MCP_GATEWAY_URL=https://64.186.234.87/mcp \
 DLC_MCP_GATEWAY_TOKEN=your-token \
   npx -y @levisli/dlc-mcp install-codex
 ```

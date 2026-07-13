@@ -1,0 +1,9 @@
+interface:
+  display_name: "DLC Task Lineage"
+  short_description: "Resolve task lineage and DDL from verified evidence"
+  default_prompt: "Use $dlc-task-lineage to resolve first-level downstream tasks, real output tables, and DDL without name inference."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "dlc-mcp"
+      description: "Read-only WeData and DLC asset evidence"

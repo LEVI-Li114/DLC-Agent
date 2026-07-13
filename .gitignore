@@ -8,3 +8,5 @@ env
 outputs/
 .code-review-graph/
 npm-debug.log*
+.local/
+.DS_Store
