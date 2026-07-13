@@ -90,6 +90,16 @@ class FakeWeDataClient:
                     }
                 }
             }
+        if action == "GetTaskCode":
+            return {
+                "Response": {
+                    "Data": {
+                        "CodeInfo": "c2VsZWN0ICogZnJvbSBkaW1fY3VzdG9tZXI7",
+                        "CodeFileSize": 27,
+                    },
+                    "RequestId": "req-task-code",
+                }
+            }
         return {"Response": {"Data": {"Items": [], "TotalPageNumber": 1}}}
 
 
@@ -164,6 +174,94 @@ class McpTest(unittest.TestCase):
         )
         self.store.upsert_column("m2c_ods_crm_payment_plan_df", "id", "bigint", "Primary key", 1)
         self.store.upsert_expert_label({"asset_name": "dim_customer", "core_level": "P1", "value_tier": "重要", "domain": "客户", "use_case": "客户分析"})
+
+    def test_live_wedata_syncs_task_code(self):
+        client = FakeWeDataClient()
+        with patch.dict(os.environ, {"WEDATA_PROJECT_ID": "project"}, clear=False):
+            live = LiveWeData(self.store, client=client)
+            live.sync_task_code(task_id="task_001")
+
+        actions = [action for action, payload in client.calls]
+        get_task_code_payloads = [payload for action, payload in client.calls if action == "GetTaskCode"]
+        cached = self.store.get_task_code(project_id="project", task_id="task_001")
+
+        self.assertIn("GetTaskCode", actions)
+        self.assertEqual(get_task_code_payloads[0]["ProjectId"], "project")
+        self.assertEqual(get_task_code_payloads[0]["TaskId"], "task_001")
+        self.assertEqual(cached["code_text"], "select * from dim_customer;")
+        self.assertEqual(cached["encoding"], "base64")
+
+    def test_tools_list_includes_get_task_code(self):
+        response = handle_request(self.store, {"jsonrpc": "2.0", "id": 40, "method": "tools/list"})
+        names = [tool["name"] for tool in response["result"]["tools"]]
+        self.assertIn("get_task_code", names)
+
+    def test_get_task_code_returns_cached_sql(self):
+        self.store.upsert_task_code(
+            "project",
+            "task_001",
+            "build_dim_customer",
+            "c2VsZWN0IDE7",
+            "select 1;",
+            9,
+            "base64",
+            {"CodeInfo": "c2VsZWN0IDE7", "CodeFileSize": 9},
+        )
+
+        response = handle_request(
+            self.store,
+            {"jsonrpc": "2.0", "id": 41, "method": "tools/call", "params": {"name": "get_task_code", "arguments": {"task_id": "task_001"}}},
+        )
+        text = response["result"]["content"][0]["text"]
+
+        self.assertIn("任务代码", text)
+        self.assertIn("task_001", text)
+        self.assertIn("build_dim_customer", text)
+        self.assertIn("```sql", text)
+        self.assertIn("select 1;", text)
+
+    def test_get_task_code_validates_missing_identity(self):
+        response = handle_request(
+            self.store,
+            {"jsonrpc": "2.0", "id": 42, "method": "tools/call", "params": {"name": "get_task_code", "arguments": {}}},
+        )
+        self.assertIn("missing_task_identity", response["result"]["content"][0]["text"])
+
+    def test_get_task_code_live_refreshes_and_returns_decoded_sql(self):
+        client = FakeWeDataClient()
+        with patch.dict(os.environ, {"WEDATA_PROJECT_ID": "project"}, clear=False):
+            live = LiveWeData(self.store, client=client)
+            response = handle_request(
+                self.store,
+                {"jsonrpc": "2.0", "id": 43, "method": "tools/call", "params": {"name": "get_task_code", "arguments": {"task_id": "task_001", "live": True}}},
+                live=live,
+            )
+
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("select * from dim_customer;", text)
+        self.assertIn("base64", text)
+        self.assertIn("GetTaskCode", [action for action, payload in client.calls])
+
+    def test_get_task_code_resolves_cached_task_name(self):
+        self.store.upsert_task_code(
+            "project",
+            "task_001",
+            "build_dim_customer",
+            "c2VsZWN0IDE7",
+            "select 1;",
+            9,
+            "base64",
+            {"CodeInfo": "c2VsZWN0IDE7", "CodeFileSize": 9},
+        )
+
+        response = handle_request(
+            self.store,
+            {"jsonrpc": "2.0", "id": 44, "method": "tools/call", "params": {"name": "get_task_code", "arguments": {"task_name": "build_dim_customer"}}},
+        )
+        text = response["result"]["content"][0]["text"]
+
+        self.assertIn("task_001", text)
+        self.assertIn("select 1;", text)
 
     def test_calls_project_tools_from_cache(self):
         self.store.upsert_project({"id": "project", "name": "prod", "display_name": "生产项目", "owner": "data-platform", "status": "enabled"})

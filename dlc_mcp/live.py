@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timedelta
 
+from .assets import AssetStore, decode_task_code_info
 from .sync_wedata import _merge_task_responses, _sync_related_task_definitions
 from .tencentcloud import TencentCloudClient
 from .wedata import import_wedata_snapshot, snapshot_from_api_dump
@@ -52,6 +53,32 @@ class LiveWeData:
             payload["Keyword"] = task_name or task_id
         data = self._list_all("ListTaskInstances", payload, max_pages=int(os.environ.get("WEDATA_LIVE_INSTANCE_MAX_PAGES", "5")))
         self._import({"task_instances": data})
+
+    def sync_task_code(self, task_id="", task_name="", project_id=""):
+        resolved_project_id = self.project_id_or_default(project_id)
+        task = self.store.resolve_task(task_id, task_name)
+        if not task and task_name:
+            self.sync_tasks(task_name)
+            task = self.store.resolve_task("", task_name)
+        if not task:
+            raise RuntimeError("task_not_found")
+        response = self.client.call("GetTaskCode", {"ProjectId": resolved_project_id, "TaskId": task["id"]})
+        if "Error" in response.get("Response", {}):
+            error = response["Response"]["Error"]
+            raise RuntimeError(f"GetTaskCode failed: {error.get('Code')} {error.get('Message')}")
+        data = response.get("Response", {}).get("Data", {}) or {}
+        code_info = data.get("CodeInfo", "")
+        code_text, encoding = decode_task_code_info(code_info)
+        self.store.upsert_task_code(
+            resolved_project_id,
+            task["id"],
+            task.get("name") or task_name,
+            code_info,
+            code_text,
+            int(data.get("CodeFileSize") or 0),
+            encoding,
+            data,
+        )
 
     def sync_data_sources(self, query=""):
         payload = {"ProjectId": self.project_id}

@@ -81,6 +81,17 @@ TOOLS = {
             },
         },
     },
+    "get_task_code": {
+        "description": "Return SQL/code content for a WeData task from cache or live GetTaskCode refresh.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "task_name": {"type": "string"},
+                "live": {"type": "boolean"},
+            },
+        },
+    },
     "list_data_sources": {
         "description": "List data sources and their stored configuration summary.",
         "schema": {"type": "object", "properties": {"query": {"type": "string"}, "live": {"type": "boolean"}}},
@@ -308,6 +319,15 @@ def _call_tool(store, request, live=None):
             if live and (args.get("live") or not data.get("runs")):
                 live.sync_task_runs(task_id=args["task_id"], instance_date=args.get("instance_date", ""))
                 data = store.get_task_runs(args["task_id"], args.get("limit", 10), args.get("instance_date", ""))
+    elif name == "get_task_code":
+        if not args.get("task_id") and not args.get("task_name"):
+            data = _error_data("missing_task_identity")
+        else:
+            project_id = os.environ.get("WEDATA_PROJECT_ID", "")
+            data = store.get_task_code(project_id, args.get("task_id", ""), args.get("task_name", ""))
+            if live and (args.get("live") or data.get("error") == "task_code_not_found" or (args.get("task_name") and data.get("error") == "task_not_found")):
+                live.sync_task_code(task_id=args.get("task_id", ""), task_name=args.get("task_name", ""), project_id=project_id)
+                data = store.get_task_code(project_id, args.get("task_id", ""), args.get("task_name", ""))
     elif name == "list_data_sources":
         data = store.list_data_sources(args.get("query", ""))
         if live and (args.get("live") or not data["results"]):
@@ -591,6 +611,20 @@ def _format_markdown(tool_name, data):
             ["TaskId", "任务名", "类型", "负责人", "状态", "产出表"],
             [[r.get("id"), r.get("name"), r.get("task_type"), r.get("owner"), r.get("status"), ", ".join(r.get("outputs") or [])] for r in rows],
         )
+    if tool_name == "get_task_code":
+        code_text = data.get("code_text", "")
+        language = _code_fence_language(code_text)
+        return _section(
+            "任务代码",
+            [
+                f"项目ID：`{_cell(data.get('project_id'))}`",
+                f"TaskId：`{_cell(data.get('task_id'))}`",
+                f"任务名：**{_cell(data.get('task_name'))}**",
+                f"代码大小：{data.get('code_file_size', 0)}",
+                f"编码：`{_cell(data.get('encoding'))}`",
+                f"更新时间：{_cell(data.get('updated_at'))}",
+            ],
+        ) + f"\n\n```{language}\n{code_text}\n```"
     if tool_name == "get_task_runs":
         rows = data.get("runs", [])
         title = f"任务运行实例：{data.get('task_name') or data.get('task_id')}"
@@ -744,6 +778,13 @@ def _format_markdown(tool_name, data):
     if tool_name == "is_core_table":
         return _format_core_decision(data)
     return "```json\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n```"
+
+
+def _code_fence_language(code_text):
+    lowered = (code_text or "").lower()
+    if any(token in lowered for token in ("select ", "insert ", "update ", "delete ", "create ", "with ")):
+        return "sql"
+    return ""
 
 
 def _section(title, lines):
