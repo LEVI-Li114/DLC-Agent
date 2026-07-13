@@ -14,6 +14,129 @@ GOVERNANCE_ISSUE_TYPES = [
     "profile_incomplete",
 ]
 
+TENCENT_CLOUD_API_CATALOG = [
+    {
+        "service": "wedata",
+        "action": "ListTasks",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "数据开发相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查询 WeData 任务列表，支持按项目和任务名筛选。",
+        "usage": "拉取任务资产；按数据源关联任务名补拉任务定义。",
+    },
+    {
+        "service": "wedata",
+        "action": "GetTask",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "数据开发相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查询单个任务详情。",
+        "usage": "兜底获取任务定义，用于解析真实输入表和输出表。",
+    },
+    {
+        "service": "wedata",
+        "action": "GetTaskCode",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "数据开发相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查询任务代码内容。",
+        "usage": "兜底获取 SQL，用于解析任务输入表和输出表。",
+    },
+    {
+        "service": "wedata",
+        "action": "ListTaskInstances",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "运维中心相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查询任务实例列表和运行状态。",
+        "usage": "拉取昨日或指定日期任务实例，支撑表级产出状态和风险诊断。",
+    },
+    {
+        "service": "wedata",
+        "action": "ListDataSources",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "项目管理相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查询项目下的数据源列表。",
+        "usage": "同步数据源资产、类型、Owner 和配置摘要。",
+    },
+    {
+        "service": "wedata",
+        "action": "GetDataSourceRelatedTasks",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "项目管理相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查询数据源关联任务。",
+        "usage": "建立数据源到任务的关系，再通过任务定义解析关联表。",
+    },
+    {
+        "service": "wedata",
+        "action": "ListTable",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "元数据相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查询表资产目录。",
+        "usage": "同步表资产、GUID、数据库、Owner、数据源关联等基础事实。",
+    },
+    {
+        "service": "wedata",
+        "action": "GetTableColumns",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "元数据相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查询表字段列表。",
+        "usage": "同步字段并生成 SQL DDL。",
+    },
+    {
+        "service": "wedata",
+        "action": "ListLineage",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "元数据相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查询资产血缘。",
+        "usage": "同步表上下游血缘。",
+    },
+    {
+        "service": "wedata",
+        "action": "ListProcessLineage",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "元数据相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查询过程或任务血缘。",
+        "usage": "按任务补齐输入表和输出表关系。",
+    },
+    {
+        "service": "wedata",
+        "action": "ListQualityRules",
+        "provider": "Tencent Cloud",
+        "product": "WeData",
+        "doc_category": "数据质量相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1267/123653",
+        "description": "查询数据质量规则。",
+        "usage": "同步表级质量规则和监控覆盖。",
+    },
+    {
+        "service": "dlc",
+        "action": "DescribeTablePartitions",
+        "provider": "Tencent Cloud",
+        "product": "DLC",
+        "doc_category": "元数据相关接口",
+        "source_url": "https://cloud.tencent.com/document/product/1342/53787",
+        "description": "查询 DLC 表分区信息。",
+        "usage": "可选同步分区事实，支撑分区健康和产出检查。",
+    },
+]
+
 
 class AssetStore:
     def __init__(self, conn):
@@ -140,6 +263,20 @@ class AssetStore:
                 updated_at text not null default '',
                 primary key (asset_type, asset_name)
             );
+            create table if not exists cloud_api_catalog (
+                service text not null,
+                action text not null,
+                provider text not null default '',
+                product text not null default '',
+                doc_category text not null default '',
+                source_url text not null default '',
+                description text not null default '',
+                usage text not null default '',
+                used_by text not null default '',
+                is_active integer not null default 1,
+                updated_at text not null default '',
+                primary key (service, action)
+            );
             """
         )
         self.conn.execute("create index if not exists idx_asset_edges_target on asset_edges (target_type, target_id)")
@@ -148,7 +285,58 @@ class AssetStore:
         self._add_column_if_missing("tables", "data_source_id", "text not null default ''")
         self._add_column_if_missing("tasks", "schedule_time", "text not null default ''")
         self._add_column_if_missing("tasks", "schedule_desc", "text not null default ''")
+        self._seed_cloud_api_catalog()
         self.conn.commit()
+
+    def _seed_cloud_api_catalog(self):
+        for item in TENCENT_CLOUD_API_CATALOG:
+            self.upsert_cloud_api(item, commit=False)
+
+    def upsert_cloud_api(self, item, commit=True):
+        self.conn.execute(
+            """
+            insert into cloud_api_catalog
+                (service, action, provider, product, doc_category, source_url, description, usage, used_by, is_active, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            on conflict(service, action) do update set
+                provider = excluded.provider,
+                product = excluded.product,
+                doc_category = excluded.doc_category,
+                source_url = excluded.source_url,
+                description = excluded.description,
+                usage = excluded.usage,
+                used_by = excluded.used_by,
+                is_active = excluded.is_active,
+                updated_at = excluded.updated_at
+            """,
+            (
+                item["service"],
+                item["action"],
+                item.get("provider", ""),
+                item.get("product", ""),
+                item.get("doc_category", ""),
+                item.get("source_url", ""),
+                item.get("description", ""),
+                item.get("usage", ""),
+                item.get("used_by", ""),
+                1 if item.get("is_active", True) else 0,
+            ),
+        )
+        if commit:
+            self.conn.commit()
+
+    def list_cloud_apis(self, service="", product=""):
+        rows = self._all(
+            """
+            select service, action, provider, product, doc_category, source_url, description, usage, used_by, is_active, updated_at
+            from cloud_api_catalog
+            where (? = '' or service = ?)
+              and (? = '' or product = ?)
+            order by service, action
+            """,
+            (service, service, product, product),
+        )
+        return {"results": [dict(row) for row in rows]}
 
     def upsert_table(self, item):
         self.conn.execute(
