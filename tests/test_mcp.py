@@ -90,6 +90,16 @@ class FakeWeDataClient:
                     }
                 }
             }
+        if action == "GetTaskCode":
+            return {
+                "Response": {
+                    "Data": {
+                        "CodeInfo": "c2VsZWN0ICogZnJvbSBkaW1fY3VzdG9tZXI7",
+                        "CodeFileSize": 27,
+                    },
+                    "RequestId": "req-task-code",
+                }
+            }
         return {"Response": {"Data": {"Items": [], "TotalPageNumber": 1}}}
 
 
@@ -164,6 +174,22 @@ class McpTest(unittest.TestCase):
         )
         self.store.upsert_column("m2c_ods_crm_payment_plan_df", "id", "bigint", "Primary key", 1)
         self.store.upsert_expert_label({"asset_name": "dim_customer", "core_level": "P1", "value_tier": "重要", "domain": "客户", "use_case": "客户分析"})
+
+    def test_live_wedata_syncs_task_code(self):
+        client = FakeWeDataClient()
+        with patch.dict(os.environ, {"WEDATA_PROJECT_ID": "project"}, clear=False):
+            live = LiveWeData(self.store, client=client)
+            live.sync_task_code(task_id="task_001")
+
+        actions = [action for action, payload in client.calls]
+        get_task_code_payloads = [payload for action, payload in client.calls if action == "GetTaskCode"]
+        cached = self.store.get_task_code(project_id="project", task_id="task_001")
+
+        self.assertIn("GetTaskCode", actions)
+        self.assertEqual(get_task_code_payloads[0]["ProjectId"], "project")
+        self.assertEqual(get_task_code_payloads[0]["TaskId"], "task_001")
+        self.assertEqual(cached["code_text"], "select * from dim_customer;")
+        self.assertEqual(cached["encoding"], "base64")
 
     def test_calls_project_tools_from_cache(self):
         self.store.upsert_project({"id": "project", "name": "prod", "display_name": "生产项目", "owner": "data-platform", "status": "enabled"})
