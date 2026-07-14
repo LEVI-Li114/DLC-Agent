@@ -191,6 +191,7 @@ INPUT_TABLE_FIELDS = (
     "SourceTableList",
     "SourceTableNames",
     "Sources",
+    "Reads",
     "ReadTables",
     "ReadTableList",
     "DependencyTables",
@@ -207,11 +208,15 @@ OUTPUT_TABLE_FIELDS = (
     "TargetTableList",
     "TargetTableNames",
     "Targets",
+    "Writes",
     "WriteTables",
     "WriteTableList",
     "SinkTables",
+    "SinkTableList",
     "ResultTables",
     "DownstreamTables",
+    "Resource",
+    "Resources",
 )
 
 TABLE_NAME_FIELDS = (
@@ -289,9 +294,18 @@ def _decode_base64(value):
 def _table_names_from_named_config(config, direction):
     if not isinstance(config, list):
         return []
-    values = {str(item.get("Name") or ""): item.get("Value") for item in config if isinstance(item, dict)}
-    node_tables = values.get("TableNames") or values.get("TableName") or values.get("TableId")
-    return _table_names_from_value(node_tables) if node_tables else []
+    wanted = {
+        "input": {"InputTables", "InputTableList", "SourceTables", "ReadTables", "DependencyTables", "TableNames", "TableName"},
+        "output": {"OutputTables", "OutputTableList", "TargetTables", "WriteTables", "SinkTables", "Resource", "Resources", "TableNames", "TableName"},
+    }[direction]
+    names = []
+    for item in config:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("Name") or item.get("Key") or "")
+        if key in wanted:
+            names.extend(_table_names_from_value(item.get("Value")))
+    return names
 
 
 def _table_names_from_value(value):
@@ -309,11 +323,11 @@ def _table_names_from_value(value):
             return _table_names_from_value(parsed)
         return [_normalize_table_name(part) for part in re.split(r"[,;\n\s]+", stripped) if _normalize_table_name(part)]
     if isinstance(value, dict):
+        names = []
         for field in TABLE_NAME_FIELDS:
             if value.get(field):
-                return _table_names_from_value(value[field])
-        names = []
-        for field in INPUT_TABLE_FIELDS + OUTPUT_TABLE_FIELDS + ("Items", "List", "Tables", "tables"):
+                names.extend(_table_names_from_value(value[field]))
+        for field in INPUT_TABLE_FIELDS + OUTPUT_TABLE_FIELDS + ("Items", "List", "Tables", "tables", "Resources", "Resource", "Config"):
             if field in value:
                 names.extend(_table_names_from_value(value[field]))
         return names
@@ -387,6 +401,7 @@ def _sql_table_names(sql, direction):
     if not sql:
         return []
     text = _strip_sql_comments(sql)
+    cte_names = _cte_names(text)
     if direction == "output":
         patterns = [
             r"\binsert\s+(?:overwrite\s+|into\s+)?(?:table\s+)?([`\w.]+)",
@@ -398,9 +413,22 @@ def _sql_table_names(sql, direction):
     for pattern in patterns:
         for match in re.finditer(pattern, text, flags=re.IGNORECASE):
             name = _normalize_table_name(match.group(1))
-            if name and not _is_sql_keyword_name(name):
+            if name and name not in cte_names and not _is_sql_keyword_name(name):
                 names.append(name)
     return _dedupe_table_names(names)
+
+
+def _cte_names(sql):
+    names = set()
+    for match in re.finditer(r"\bwith\s+([`\w.]+)\s+as\s*\(", sql, flags=re.IGNORECASE):
+        name = _normalize_table_name(match.group(1))
+        if name:
+            names.add(name)
+    for match in re.finditer(r",\s*([`\w.]+)\s+as\s*\(", sql, flags=re.IGNORECASE):
+        name = _normalize_table_name(match.group(1))
+        if name:
+            names.add(name)
+    return names
 
 
 def _strip_sql_comments(sql):

@@ -699,6 +699,37 @@ class WeDataImportTest(unittest.TestCase):
         self.assertEqual(snapshot["tasks"][0]["inputs"], ["dwd_bill_company_di", "dim_company"])
         self.assertEqual(snapshot["tasks"][0]["outputs"], ["ads_bill_company_1d_di"])
 
+    def test_task_table_parser_reads_additional_aliases_and_nested_resources(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "tasks": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "TaskId": "task_mid",
+                                    "TaskName": "build_ads_from_mid",
+                                    "Reads": '[{"TableName":"mid_customer_profile_di"}]',
+                                    "Writes": {"Tables": [{"DbTableName": "mart.ads_customer_profile_di"}]},
+                                },
+                                {
+                                    "TaskId": "task_resource",
+                                    "TaskName": "build_mid_from_dwd",
+                                    "SourceTableList": [{"Name": "dwd_customer_profile_di"}],
+                                    "Resources": [{"ResourceName": "warehouse.mid_customer_profile_di"}],
+                                },
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(snapshot["tasks"][0]["inputs"], ["mid_customer_profile_di"])
+        self.assertEqual(snapshot["tasks"][0]["outputs"], ["ads_customer_profile_di"])
+        self.assertEqual(snapshot["tasks"][1]["inputs"], ["dwd_customer_profile_di"])
+        self.assertEqual(snapshot["tasks"][1]["outputs"], ["mid_customer_profile_di"])
+
     def test_layer_named_task_does_not_create_table_asset(self):
         snapshot = snapshot_from_api_dump(
             {
@@ -756,6 +787,34 @@ class WeDataImportTest(unittest.TestCase):
 
         self.assertEqual(snapshot["tasks"][0]["outputs"], ["ads_bill_company_1d_di"])
         self.assertEqual(snapshot["tasks"][0]["inputs"], ["dwd_bill_company_di", "dim_company"])
+
+    def test_sql_parser_handles_mid_outputs_and_filters_ctes(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "tasks": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {
+                                    "TaskId": "task_sql_mid",
+                                    "TaskName": "build_mid_revenue",
+                                    "Sql": """
+                                    with recent_orders as (
+                                        select * from ods_order_di
+                                    )
+                                    insert overwrite table mid_revenue_di
+                                    select * from recent_orders join dwd_customer_di on recent_orders.customer_id = dwd_customer_di.id
+                                    """,
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(snapshot["tasks"][0]["outputs"], ["mid_revenue_di"])
+        self.assertEqual(snapshot["tasks"][0]["inputs"], ["ods_order_di", "dwd_customer_di"])
 
     def test_maps_task_table_names_from_nested_sql_content(self):
         snapshot = snapshot_from_api_dump(
