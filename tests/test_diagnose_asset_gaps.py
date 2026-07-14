@@ -85,6 +85,21 @@ class DiagnoseAssetGapsTest(unittest.TestCase):
         self.assertIn("action 名/版本不支持", report)
         self.assertIn("ListTablePartitions", report)
 
+    def test_mid_layer_is_not_reported_as_unknown(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "assets.db")
+            store = AssetStore(sqlite3.connect(db_path))
+            store.init_schema()
+            store.upsert_table({"name": "mid_customer_profile_di", "layer": "mid", "owner": "owner-a"})
+            store.upsert_table({"name": "mystery_table", "layer": "unknown", "owner": "owner-b"})
+
+            report = render_gap_diagnosis(db_path, tmpdir, sample_limit=10)
+
+        self.assertIn("DB unknown 层表数：**1**", report)
+        unknown_section = report.split("## unknown 层诊断", 1)[1].split("## 分区接口参数诊断", 1)[0]
+        self.assertIn("mystery_table", unknown_section)
+        self.assertNotIn("mid_customer_profile_di", unknown_section)
+
 
 if __name__ == "__main__":
     unittest.main()

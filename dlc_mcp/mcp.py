@@ -739,12 +739,38 @@ def _format_markdown(tool_name, data):
         )
     if tool_name == "get_asset_coverage":
         totals = data.get("totals", {})
+        warehouse = data.get("warehouse_coverage", {})
+        unknown = data.get("unknown_pool", {})
+        ratios = warehouse.get("ratios", {})
         return "\n\n".join(
             [
                 _section("资产覆盖率", ["按已同步表资产统计。"]),
                 _table("资产类型 数量".split(), [[_count_label(k), v] for k, v in totals.items()]),
+                _section(
+                    "有效数仓覆盖",
+                    [
+                        f"数仓层：{', '.join(data.get('warehouse_layers') or [])}",
+                        f"表数：{warehouse.get('table_count', 0)}",
+                        f"字段：{ratios.get('fields', 0):.1%}",
+                        f"血缘：{ratios.get('lineage', 0):.1%}",
+                        f"任务映射：{ratios.get('tasks', 0):.1%}",
+                        f"运行实例关联：{ratios.get('runs', 0):.1%}",
+                        f"数据源：{ratios.get('data_source', 0):.1%}",
+                    ],
+                ),
+                _section(
+                    "unknown 资产池",
+                    [
+                        f"表数：{unknown.get('table_count', 0)}",
+                        f"有字段：{unknown.get('tables_with_columns', 0)}",
+                        f"有血缘：{unknown.get('tables_with_lineage', 0)}",
+                        f"有关联任务：{unknown.get('tables_with_tasks', 0)}",
+                        f"有运行实例：{unknown.get('tables_with_runs', 0)}",
+                        "unknown 不计入主覆盖率，但仍作为治理缺口追踪。",
+                    ],
+                ),
                 _table(
-                    ["层级", "表数", "有字段", "有质量规则", "有下游", "有上游", "有关联任务", "有数据源"],
+                    ["层级", "表数", "有字段", "有质量规则", "有下游", "有上游", "有关联任务", "有运行实例", "有数据源"],
                     [
                         [
                             r.get("layer"),
@@ -754,6 +780,7 @@ def _format_markdown(tool_name, data):
                             _ratio(r.get("tables_with_downstream"), r.get("table_count")),
                             _ratio(r.get("tables_with_upstream"), r.get("table_count")),
                             _ratio(r.get("tables_with_tasks"), r.get("table_count")),
+                            _ratio(r.get("tables_with_runs"), r.get("table_count")),
                             _ratio(r.get("tables_with_data_source"), r.get("table_count")),
                         ]
                         for r in data.get("layers", [])
@@ -776,7 +803,7 @@ def _format_markdown(tool_name, data):
                     ],
                 ),
                 _table(
-                    ["表名", "层级", "负责人", "字段", "质量规则", "上游", "下游", "任务", "运行实例", "数据源", "缺口"],
+                    ["表名", "层级", "负责人", "字段", "质量规则", "上游", "下游", "任务", "产出任务", "运行实例", "运行实例缺口原因", "数据源", "缺口"],
                     [
                         [
                             r.get("name"),
@@ -787,7 +814,9 @@ def _format_markdown(tool_name, data):
                             r.get("upstream_count"),
                             r.get("downstream_count"),
                             r.get("task_count"),
+                            r.get("producer_task_count"),
                             r.get("run_count"),
+                            _run_gap_reason_label(r.get("run_gap_reason")),
                             r.get("data_source_id"),
                             "、".join(r.get("gaps") or []),
                         ]
@@ -801,6 +830,14 @@ def _format_markdown(tool_name, data):
     if tool_name == "is_core_table":
         return _format_core_decision(data)
     return "```json\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n```"
+
+
+def _run_gap_reason_label(reason):
+    labels = {
+        "missing_producer_task": "缺产出任务",
+        "missing_task_runs": "有产出任务但缺运行实例",
+    }
+    return labels.get(reason or "", "")
 
 
 def _code_fence_language(code_text):

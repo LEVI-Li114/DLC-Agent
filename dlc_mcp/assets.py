@@ -15,6 +15,9 @@ GOVERNANCE_ISSUE_TYPES = [
     "profile_incomplete",
 ]
 
+WAREHOUSE_LAYERS = ("ods", "dim", "dwd", "dws", "mid", "ads")
+WAREHOUSE_LAYER_SET = set(WAREHOUSE_LAYERS)
+
 
 TENCENT_CLOUD_API_CATALOG = [
     {
@@ -1059,6 +1062,7 @@ class AssetStore:
             "counts": counts,
             "coverage_ratios": coverage_ratios,
             "coverage_thresholds": thresholds,
+            "task_run_window": _task_run_window_from_env(),
             "latest_signals": signals,
             "gaps": gaps,
             "notes": [
@@ -1079,6 +1083,7 @@ class AssetStore:
                 sum(case when d.downstream_count > 0 then 1 else 0 end) as tables_with_downstream,
                 sum(case when u.upstream_count > 0 then 1 else 0 end) as tables_with_upstream,
                 sum(case when tt.task_count > 0 then 1 else 0 end) as tables_with_tasks,
+                sum(case when r.run_count > 0 then 1 else 0 end) as tables_with_runs,
                 sum(case when data_source_id != '' then 1 else 0 end) as tables_with_data_source
             from tables t
             left join (select table_name, count(*) as column_count from columns group by table_name) c on c.table_name = t.name
@@ -1086,16 +1091,30 @@ class AssetStore:
             left join (select upstream, count(*) as downstream_count from lineage group by upstream) d on d.upstream = t.name
             left join (select downstream, count(*) as upstream_count from lineage group by downstream) u on u.downstream = t.name
             left join (select table_name, count(distinct task_id) as task_count from task_tables group by table_name) tt on tt.table_name = t.name
+            left join (
+                select tt.table_name, count(distinct tr.instance_id) as run_count
+                from task_tables tt
+                join task_runs tr on tr.task_id = tt.task_id
+                where tt.direction = 'output'
+                group by tt.table_name
+            ) r on r.table_name = t.name
             group by coalesce(nullif(layer, ''), 'unknown')
-            order by layer
+            order by case coalesce(nullif(layer, ''), 'unknown') when 'ods' then 1 when 'dim' then 2 when 'dwd' then 3 when 'dws' then 4 when 'mid' then 5 when 'ads' then 6 else 9 end, layer
             """
         )
+        rows = [dict(row) for row in layer_rows]
+        warehouse_rows = [row for row in rows if row.get("layer") in WAREHOUSE_LAYER_SET]
+        unknown_rows = [row for row in rows if row.get("layer") not in WAREHOUSE_LAYER_SET]
         return {
             "totals": totals,
-            "layers": [dict(row) for row in layer_rows],
+            "layers": rows,
+            "warehouse_layers": list(WAREHOUSE_LAYERS),
+            "warehouse_coverage": _coverage_summary(warehouse_rows),
+            "unknown_pool": _coverage_summary(unknown_rows),
             "coverage_notes": [
-                "字段、质量、血缘、任务、数据源覆盖率都按已同步表资产计算。",
-                "覆盖为 0 不等于业务不存在，优先检查同步开关、API 权限和同步范围。",
+                "主覆盖率按有效数仓层 ods/dim/dwd/dws/mid/ads 统计。",
+                "unknown 不计入主覆盖率，但仍作为治理缺口单独展示。",
+                "运行实例关联只统计 output 产出任务的 task_runs。",
             ],
         }
 
@@ -1116,6 +1135,7 @@ class AssetStore:
                 coalesce(d.downstream_count, 0) as downstream_count,
                 coalesce(u.upstream_count, 0) as upstream_count,
                 coalesce(tt.task_count, 0) as task_count,
+                coalesce(pt.producer_task_count, 0) as producer_task_count,
                 coalesce(r.run_count, 0) as run_count
             from tables t
             left join (select table_name, count(*) as column_count from columns group by table_name) c on c.table_name = t.name
@@ -1123,6 +1143,7 @@ class AssetStore:
             left join (select upstream, count(*) as downstream_count from lineage group by upstream) d on d.upstream = t.name
             left join (select downstream, count(*) as upstream_count from lineage group by downstream) u on u.downstream = t.name
             left join (select table_name, count(distinct task_id) as task_count from task_tables group by table_name) tt on tt.table_name = t.name
+            left join (select table_name, count(distinct task_id) as producer_task_count from task_tables where direction = 'output' group by table_name) pt on pt.table_name = t.name
             left join (
                 select tt.table_name, count(distinct r.instance_id) as run_count
                 from task_tables tt
@@ -1143,6 +1164,7 @@ class AssetStore:
         wanted = _normalize_gap_type(gap_type)
         for row in rows:
             item = dict(row)
+            item["run_gap_reason"] = _run_gap_reason(item)
             gaps = _coverage_gaps(item)
             if not gaps:
                 continue
@@ -1158,7 +1180,7 @@ class AssetStore:
             "layer": layer,
             "limit": limit,
             "results": results,
-            "supported_gap_types": ["fields", "quality", "lineage", "upstream", "downstream", "tasks", "runs", "data_source"],
+            "supported_gap_types": ["fields", "quality", "lineage", "upstream", "downstream", "tasks", "producer_tasks", "runs", "data_source"],
         }
 
     def get_asset_governance_issue_inventory(self, layer="", core_level="", issue_type="", limit=100):
@@ -1224,6 +1246,7 @@ class AssetStore:
                     coalesce(q.rule_count, 0) as quality_rule_count,
                     coalesce(d.downstream_count, 0) as downstream_count,
                     coalesce(tt.task_count, 0) as task_count,
+                    coalesce(pt.producer_task_count, 0) as producer_task_count,
                     coalesce(r.run_count, 0) as run_count
                 from tables t
                 left join expert_labels el on el.asset_type = 'table' and el.asset_name = t.name
@@ -1231,6 +1254,7 @@ class AssetStore:
                 left join (select table_name, count(*) as rule_count from quality_rules group by table_name) q on q.table_name = t.name
                 left join (select upstream, count(*) as downstream_count from lineage group by upstream) d on d.upstream = t.name
                 left join (select table_name, count(distinct task_id) as task_count from task_tables group by table_name) tt on tt.table_name = t.name
+                left join (select table_name, count(distinct task_id) as producer_task_count from task_tables where direction = 'output' group by table_name) pt on pt.table_name = t.name
                 left join (
                     select tt.table_name, count(distinct r.instance_id) as run_count
                     from task_tables tt
@@ -2805,6 +2829,8 @@ def _governance_issues_for_table(table):
         issues.append(_governance_issue(table, "missing_quality_rules", "source_governance_gap", "Compare raw quality rules with DB rules for this table."))
     if int(table.get("task_count") or 0) == 0:
         issues.append(_governance_issue(table, "missing_task_mapping", "parser_gap", "Check raw task inputs/outputs and SQL table-name normalization."))
+    elif int(table.get("producer_task_count") or 0) == 0:
+        issues.append(_governance_issue(table, "missing_task_mapping", "producer_mapping_gap", "Check task outputs and SQL table-name normalization for this table."))
     elif int(table.get("run_count") or 0) == 0:
         issues.append(_governance_issue(table, "missing_task_runs", "instance_window_gap", "Check ListTaskInstances time window, max pages, and task_id alignment."))
     if not table.get("data_source_id"):
@@ -2859,6 +2885,7 @@ def _governance_issue(table, issue_type, root_cause, next_check):
         "quality_rule_count": int(table.get("quality_rule_count") or 0),
         "downstream_count": int(table.get("downstream_count") or 0),
         "task_count": int(table.get("task_count") or 0),
+        "producer_task_count": int(table.get("producer_task_count") or 0),
         "run_count": int(table.get("run_count") or 0),
         "data_source_id": table.get("data_source_id", ""),
     }
@@ -3327,6 +3354,11 @@ def _normalize_gap_type(gap_type):
         "downstream": "downstream",
         "task": "tasks",
         "tasks": "tasks",
+        "producer": "producer_tasks",
+        "producer_task": "producer_tasks",
+        "producer_tasks": "producer_tasks",
+        "output_task": "producer_tasks",
+        "output_tasks": "producer_tasks",
         "run": "runs",
         "runs": "runs",
         "instance": "runs",
@@ -3336,6 +3368,61 @@ def _normalize_gap_type(gap_type):
         "source": "data_source",
     }
     return aliases.get((gap_type or "").strip().lower(), "")
+
+
+def _task_run_window_from_env():
+    return {
+        "start": os.environ.get("WEDATA_INSTANCE_START", ""),
+        "end": os.environ.get("WEDATA_INSTANCE_END", ""),
+        "timezone": os.environ.get("WEDATA_INSTANCE_TIMEZONE", "UTC+8"),
+        "keywords": os.environ.get("WEDATA_INSTANCE_KEYWORDS", ""),
+        "retention_days": int(os.environ.get("DLC_MCP_TASK_RUN_RETENTION_DAYS", "7") or 7),
+    }
+
+
+def _coverage_ratio(numerator, denominator):
+    return round(int(numerator or 0) / int(denominator or 0), 4) if int(denominator or 0) else 0
+
+
+def _coverage_summary(rows):
+    summary = {
+        "table_count": 0,
+        "tables_with_columns": 0,
+        "tables_with_quality_rules": 0,
+        "tables_with_lineage": 0,
+        "tables_with_tasks": 0,
+        "tables_with_runs": 0,
+        "tables_with_data_source": 0,
+    }
+    for row in rows:
+        table_count = int(row.get("table_count") or 0)
+        upstream = int(row.get("tables_with_upstream") or 0)
+        downstream = int(row.get("tables_with_downstream") or 0)
+        summary["table_count"] += table_count
+        summary["tables_with_columns"] += int(row.get("tables_with_columns") or 0)
+        summary["tables_with_quality_rules"] += int(row.get("tables_with_quality_rules") or 0)
+        summary["tables_with_lineage"] += min(table_count, upstream + downstream)
+        summary["tables_with_tasks"] += int(row.get("tables_with_tasks") or 0)
+        summary["tables_with_runs"] += int(row.get("tables_with_runs") or 0)
+        summary["tables_with_data_source"] += int(row.get("tables_with_data_source") or 0)
+    table_count = summary["table_count"]
+    summary["ratios"] = {
+        "fields": _coverage_ratio(summary["tables_with_columns"], table_count),
+        "quality": _coverage_ratio(summary["tables_with_quality_rules"], table_count),
+        "lineage": _coverage_ratio(summary["tables_with_lineage"], table_count),
+        "tasks": _coverage_ratio(summary["tables_with_tasks"], table_count),
+        "runs": _coverage_ratio(summary["tables_with_runs"], table_count),
+        "data_source": _coverage_ratio(summary["tables_with_data_source"], table_count),
+    }
+    return summary
+
+
+def _run_gap_reason(row):
+    if int(row.get("run_count") or 0) > 0:
+        return ""
+    if int(row.get("producer_task_count") or 0) == 0:
+        return "missing_producer_task"
+    return "missing_task_runs"
 
 
 def _coverage_gaps(row):
@@ -3354,6 +3441,8 @@ def _coverage_gaps(row):
         gaps.append("lineage")
     if int(row.get("task_count") or 0) == 0:
         gaps.append("tasks")
+    if int(row.get("producer_task_count") or 0) == 0:
+        gaps.append("producer_tasks")
     if int(row.get("run_count") or 0) == 0:
         gaps.append("runs")
     if not row.get("data_source_id"):
@@ -3369,7 +3458,8 @@ def _gap_label(gap):
         "downstream": "缺下游血缘",
         "lineage": "缺完整血缘",
         "tasks": "缺相关任务",
-        "runs": "缺运行实例",
+        "producer_tasks": "缺产出任务",
+        "runs": "有产出任务但缺运行实例",
         "data_source": "缺数据源关联",
     }
     return labels.get(gap, gap)

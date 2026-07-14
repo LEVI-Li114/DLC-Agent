@@ -1,6 +1,8 @@
+import os
 import sqlite3
 from datetime import date
 import unittest
+from unittest.mock import patch
 
 from dlc_mcp.assets import AssetStore, decode_task_code_info
 
@@ -415,9 +417,34 @@ class AssetStoreTest(unittest.TestCase):
         self.assertNotIn("未同步任务运行实例", health["gaps"])
         self.assertEqual(health["status"], "partial")
         self.assertIn("coverage_ratios", health)
-        self.assertEqual(coverage["layers"][0]["layer"], "ads")
-        self.assertEqual(coverage["layers"][0]["tables_with_quality_rules"], 1)
-        self.assertEqual(coverage["layers"][1]["layer"], "dws")
+        layers = {row["layer"]: row for row in coverage["layers"]}
+        self.assertEqual(layers["ads"]["tables_with_quality_rules"], 1)
+        self.assertIn("dws", layers)
+
+    def test_sync_health_exposes_task_run_window(self):
+        store = make_store()
+        with patch.dict(
+            os.environ,
+            {
+                "WEDATA_INSTANCE_START": "2026-07-13 00:00:00",
+                "WEDATA_INSTANCE_END": "2026-07-13 23:59:59",
+                "WEDATA_INSTANCE_TIMEZONE": "UTC+8",
+                "WEDATA_INSTANCE_KEYWORDS": "daily",
+                "DLC_MCP_TASK_RUN_RETENTION_DAYS": "7",
+            },
+        ):
+            health = store.get_sync_health()
+
+        self.assertEqual(
+            health["task_run_window"],
+            {
+                "start": "2026-07-13 00:00:00",
+                "end": "2026-07-13 23:59:59",
+                "timezone": "UTC+8",
+                "keywords": "daily",
+                "retention_days": 7,
+            },
+        )
 
     def test_asset_coverage_gaps_filter_by_type_and_layer(self):
         gaps = make_store().list_asset_coverage_gaps(gap_type="quality", layer="dws", limit=10)
@@ -427,9 +454,56 @@ class AssetStoreTest(unittest.TestCase):
         self.assertIn("缺质量规则", gaps["results"][0]["gaps"])
         self.assertEqual(gaps["supported_gap_types"][0], "fields")
 
+    def test_asset_coverage_reports_warehouse_and_unknown_pool_separately(self):
+        store = make_store()
+        store.upsert_table({"name": "ads_revenue", "layer": "ads", "data_source_id": "DLC"})
+        store.upsert_table({"name": "mid_revenue", "layer": "mid", "data_source_id": "DLC"})
+        store.upsert_table({"name": "mystery_table", "layer": "unknown", "data_source_id": "DLC"})
+        store.upsert_column("ads_revenue", "id", "string", "", 1)
+        store.upsert_column("mid_revenue", "id", "string", "", 1)
+        store.upsert_lineage("mid_revenue", "ads_revenue", "build_ads_revenue")
+        store.upsert_task({"id": "task_ads", "name": "build_ads_revenue", "outputs": ["ads_revenue"], "inputs": ["mid_revenue"]})
+        store.upsert_task_run({"task_id": "task_ads", "instance_id": "run_1", "instance_date": "2026-07-13", "status": "COMPLETED"})
+
+        coverage = store.get_asset_coverage()
+
+        self.assertEqual(coverage["warehouse_layers"], ["ods", "dim", "dwd", "dws", "mid", "ads"])
+        self.assertEqual(coverage["warehouse_coverage"]["table_count"], 4)
+        self.assertEqual(coverage["warehouse_coverage"]["tables_with_columns"], 4)
+        self.assertEqual(coverage["warehouse_coverage"]["tables_with_lineage"], 4)
+        self.assertEqual(coverage["warehouse_coverage"]["tables_with_tasks"], 3)
+        self.assertEqual(coverage["warehouse_coverage"]["tables_with_runs"], 1)
+        self.assertEqual(coverage["warehouse_coverage"]["ratios"]["fields"], 1.0)
+        self.assertEqual(coverage["warehouse_coverage"]["ratios"]["lineage"], 1.0)
+        self.assertEqual(coverage["warehouse_coverage"]["ratios"]["tasks"], 0.75)
+        self.assertEqual(coverage["warehouse_coverage"]["ratios"]["runs"], 0.25)
+        self.assertEqual(coverage["unknown_pool"]["table_count"], 1)
+        self.assertEqual(coverage["unknown_pool"]["tables_with_data_source"], 1)
+
     def test_asset_coverage_gaps_rejects_unknown_type(self):
         with self.assertRaisesRegex(ValueError, "unsupported gap_type"):
             make_store().list_asset_coverage_gaps(gap_type="missing_columns")
+
+    def test_coverage_gaps_distinguish_missing_producer_from_missing_runs(self):
+        store = make_store()
+        store.upsert_table({"name": "ads_has_only_input", "layer": "ads", "data_source_id": "DLC"})
+        store.upsert_table({"name": "ads_has_output_no_run", "layer": "ads", "data_source_id": "DLC"})
+        store.upsert_table({"name": "ads_has_output_run", "layer": "ads", "data_source_id": "DLC"})
+        store.upsert_task({"id": "consumer", "name": "consumer", "inputs": ["ads_has_only_input"]})
+        store.upsert_task({"id": "producer_no_run", "name": "producer_no_run", "outputs": ["ads_has_output_no_run"]})
+        store.upsert_task({"id": "producer_run", "name": "producer_run", "outputs": ["ads_has_output_run"]})
+        store.upsert_task_run({"task_id": "producer_run", "instance_id": "run_1", "instance_date": "2026-07-13", "status": "COMPLETED"})
+
+        gaps = store.list_asset_coverage_gaps("runs", "ads", 20)["results"]
+        by_name = {row["name"]: row for row in gaps}
+
+        self.assertEqual(by_name["ads_has_only_input"]["producer_task_count"], 0)
+        self.assertEqual(by_name["ads_has_only_input"]["run_gap_reason"], "missing_producer_task")
+        self.assertIn("缺产出任务", by_name["ads_has_only_input"]["gaps"])
+        self.assertEqual(by_name["ads_has_output_no_run"]["producer_task_count"], 1)
+        self.assertEqual(by_name["ads_has_output_no_run"]["run_gap_reason"], "missing_task_runs")
+        self.assertIn("有产出任务但缺运行实例", by_name["ads_has_output_no_run"]["gaps"])
+        self.assertNotIn("ads_has_output_run", by_name)
 
     def test_prune_task_runs_keeps_only_recent_seven_calendar_days(self):
         store = make_store()
