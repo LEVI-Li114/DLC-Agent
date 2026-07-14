@@ -1134,6 +1134,7 @@ class AssetStore:
                 coalesce(d.downstream_count, 0) as downstream_count,
                 coalesce(u.upstream_count, 0) as upstream_count,
                 coalesce(tt.task_count, 0) as task_count,
+                coalesce(pt.producer_task_count, 0) as producer_task_count,
                 coalesce(r.run_count, 0) as run_count
             from tables t
             left join (select table_name, count(*) as column_count from columns group by table_name) c on c.table_name = t.name
@@ -1141,6 +1142,7 @@ class AssetStore:
             left join (select upstream, count(*) as downstream_count from lineage group by upstream) d on d.upstream = t.name
             left join (select downstream, count(*) as upstream_count from lineage group by downstream) u on u.downstream = t.name
             left join (select table_name, count(distinct task_id) as task_count from task_tables group by table_name) tt on tt.table_name = t.name
+            left join (select table_name, count(distinct task_id) as producer_task_count from task_tables where direction = 'output' group by table_name) pt on pt.table_name = t.name
             left join (
                 select tt.table_name, count(distinct r.instance_id) as run_count
                 from task_tables tt
@@ -1161,6 +1163,7 @@ class AssetStore:
         wanted = _normalize_gap_type(gap_type)
         for row in rows:
             item = dict(row)
+            item["run_gap_reason"] = _run_gap_reason(item)
             gaps = _coverage_gaps(item)
             if not gaps:
                 continue
@@ -1176,7 +1179,7 @@ class AssetStore:
             "layer": layer,
             "limit": limit,
             "results": results,
-            "supported_gap_types": ["fields", "quality", "lineage", "upstream", "downstream", "tasks", "runs", "data_source"],
+            "supported_gap_types": ["fields", "quality", "lineage", "upstream", "downstream", "tasks", "producer_tasks", "runs", "data_source"],
         }
 
     def get_asset_governance_issue_inventory(self, layer="", core_level="", issue_type="", limit=100):
@@ -1242,6 +1245,7 @@ class AssetStore:
                     coalesce(q.rule_count, 0) as quality_rule_count,
                     coalesce(d.downstream_count, 0) as downstream_count,
                     coalesce(tt.task_count, 0) as task_count,
+                    coalesce(pt.producer_task_count, 0) as producer_task_count,
                     coalesce(r.run_count, 0) as run_count
                 from tables t
                 left join expert_labels el on el.asset_type = 'table' and el.asset_name = t.name
@@ -1249,6 +1253,7 @@ class AssetStore:
                 left join (select table_name, count(*) as rule_count from quality_rules group by table_name) q on q.table_name = t.name
                 left join (select upstream, count(*) as downstream_count from lineage group by upstream) d on d.upstream = t.name
                 left join (select table_name, count(distinct task_id) as task_count from task_tables group by table_name) tt on tt.table_name = t.name
+                left join (select table_name, count(distinct task_id) as producer_task_count from task_tables where direction = 'output' group by table_name) pt on pt.table_name = t.name
                 left join (
                     select tt.table_name, count(distinct r.instance_id) as run_count
                     from task_tables tt
@@ -2823,6 +2828,8 @@ def _governance_issues_for_table(table):
         issues.append(_governance_issue(table, "missing_quality_rules", "source_governance_gap", "Compare raw quality rules with DB rules for this table."))
     if int(table.get("task_count") or 0) == 0:
         issues.append(_governance_issue(table, "missing_task_mapping", "parser_gap", "Check raw task inputs/outputs and SQL table-name normalization."))
+    elif int(table.get("producer_task_count") or 0) == 0:
+        issues.append(_governance_issue(table, "missing_task_mapping", "producer_mapping_gap", "Check task outputs and SQL table-name normalization for this table."))
     elif int(table.get("run_count") or 0) == 0:
         issues.append(_governance_issue(table, "missing_task_runs", "instance_window_gap", "Check ListTaskInstances time window, max pages, and task_id alignment."))
     if not table.get("data_source_id"):
@@ -2877,6 +2884,7 @@ def _governance_issue(table, issue_type, root_cause, next_check):
         "quality_rule_count": int(table.get("quality_rule_count") or 0),
         "downstream_count": int(table.get("downstream_count") or 0),
         "task_count": int(table.get("task_count") or 0),
+        "producer_task_count": int(table.get("producer_task_count") or 0),
         "run_count": int(table.get("run_count") or 0),
         "data_source_id": table.get("data_source_id", ""),
     }
@@ -3345,6 +3353,11 @@ def _normalize_gap_type(gap_type):
         "downstream": "downstream",
         "task": "tasks",
         "tasks": "tasks",
+        "producer": "producer_tasks",
+        "producer_task": "producer_tasks",
+        "producer_tasks": "producer_tasks",
+        "output_task": "producer_tasks",
+        "output_tasks": "producer_tasks",
         "run": "runs",
         "runs": "runs",
         "instance": "runs",
@@ -3393,6 +3406,14 @@ def _coverage_summary(rows):
     return summary
 
 
+def _run_gap_reason(row):
+    if int(row.get("run_count") or 0) > 0:
+        return ""
+    if int(row.get("producer_task_count") or 0) == 0:
+        return "missing_producer_task"
+    return "missing_task_runs"
+
+
 def _coverage_gaps(row):
     gaps = []
     if int(row.get("column_count") or 0) == 0:
@@ -3409,6 +3430,8 @@ def _coverage_gaps(row):
         gaps.append("lineage")
     if int(row.get("task_count") or 0) == 0:
         gaps.append("tasks")
+    if int(row.get("producer_task_count") or 0) == 0:
+        gaps.append("producer_tasks")
     if int(row.get("run_count") or 0) == 0:
         gaps.append("runs")
     if not row.get("data_source_id"):
@@ -3424,7 +3447,8 @@ def _gap_label(gap):
         "downstream": "缺下游血缘",
         "lineage": "缺完整血缘",
         "tasks": "缺相关任务",
-        "runs": "缺运行实例",
+        "producer_tasks": "缺产出任务",
+        "runs": "有产出任务但缺运行实例",
         "data_source": "缺数据源关联",
     }
     return labels.get(gap, gap)

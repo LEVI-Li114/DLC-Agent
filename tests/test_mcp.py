@@ -973,6 +973,22 @@ class McpTest(unittest.TestCase):
         self.assertIn("unknown 资产池", text)
         self.assertIn("unknown 不计入主覆盖率", text)
 
+    def test_coverage_gap_markdown_includes_producer_task_and_run_reason(self):
+        store = AssetStore(sqlite3.connect(":memory:"))
+        store.init_schema()
+        store.upsert_table({"name": "ads_has_output_no_run", "layer": "ads", "data_source_id": "DLC"})
+        store.upsert_task({"id": "producer_no_run", "name": "producer_no_run", "outputs": ["ads_has_output_no_run"]})
+
+        response = handle_request(
+            store,
+            {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "list_asset_coverage_gaps", "arguments": {"gap_type": "runs", "layer": "ads", "limit": 10}}},
+        )
+        text = response["result"]["content"][0]["text"]
+
+        self.assertIn("产出任务", text)
+        self.assertIn("运行实例缺口原因", text)
+        self.assertIn("有产出任务但缺运行实例", text)
+
 
 class FakeLive:
     def __init__(self, store):

@@ -457,6 +457,27 @@ class AssetStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported gap_type"):
             make_store().list_asset_coverage_gaps(gap_type="missing_columns")
 
+    def test_coverage_gaps_distinguish_missing_producer_from_missing_runs(self):
+        store = make_store()
+        store.upsert_table({"name": "ads_has_only_input", "layer": "ads", "data_source_id": "DLC"})
+        store.upsert_table({"name": "ads_has_output_no_run", "layer": "ads", "data_source_id": "DLC"})
+        store.upsert_table({"name": "ads_has_output_run", "layer": "ads", "data_source_id": "DLC"})
+        store.upsert_task({"id": "consumer", "name": "consumer", "inputs": ["ads_has_only_input"]})
+        store.upsert_task({"id": "producer_no_run", "name": "producer_no_run", "outputs": ["ads_has_output_no_run"]})
+        store.upsert_task({"id": "producer_run", "name": "producer_run", "outputs": ["ads_has_output_run"]})
+        store.upsert_task_run({"task_id": "producer_run", "instance_id": "run_1", "instance_date": "2026-07-13", "status": "COMPLETED"})
+
+        gaps = store.list_asset_coverage_gaps("runs", "ads", 20)["results"]
+        by_name = {row["name"]: row for row in gaps}
+
+        self.assertEqual(by_name["ads_has_only_input"]["producer_task_count"], 0)
+        self.assertEqual(by_name["ads_has_only_input"]["run_gap_reason"], "missing_producer_task")
+        self.assertIn("缺产出任务", by_name["ads_has_only_input"]["gaps"])
+        self.assertEqual(by_name["ads_has_output_no_run"]["producer_task_count"], 1)
+        self.assertEqual(by_name["ads_has_output_no_run"]["run_gap_reason"], "missing_task_runs")
+        self.assertIn("有产出任务但缺运行实例", by_name["ads_has_output_no_run"]["gaps"])
+        self.assertNotIn("ads_has_output_run", by_name)
+
     def test_prune_task_runs_keeps_only_recent_seven_calendar_days(self):
         store = make_store()
         for day in ("2026-07-06", "2026-07-07", "2026-07-13"):

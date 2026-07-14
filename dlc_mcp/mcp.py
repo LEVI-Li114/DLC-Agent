@@ -803,7 +803,7 @@ def _format_markdown(tool_name, data):
                     ],
                 ),
                 _table(
-                    ["表名", "层级", "负责人", "字段", "质量规则", "上游", "下游", "任务", "运行实例", "数据源", "缺口"],
+                    ["表名", "层级", "负责人", "字段", "质量规则", "上游", "下游", "任务", "产出任务", "运行实例", "运行实例缺口原因", "数据源", "缺口"],
                     [
                         [
                             r.get("name"),
@@ -814,7 +814,9 @@ def _format_markdown(tool_name, data):
                             r.get("upstream_count"),
                             r.get("downstream_count"),
                             r.get("task_count"),
+                            r.get("producer_task_count"),
                             r.get("run_count"),
+                            _run_gap_reason_label(r.get("run_gap_reason")),
                             r.get("data_source_id"),
                             "、".join(r.get("gaps") or []),
                         ]
@@ -828,6 +830,14 @@ def _format_markdown(tool_name, data):
     if tool_name == "is_core_table":
         return _format_core_decision(data)
     return "```json\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n```"
+
+
+def _run_gap_reason_label(reason):
+    labels = {
+        "missing_producer_task": "缺产出任务",
+        "missing_task_runs": "有产出任务但缺运行实例",
+    }
+    return labels.get(reason or "", "")
 
 
 def _code_fence_language(code_text):
