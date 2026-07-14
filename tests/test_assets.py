@@ -1,6 +1,8 @@
+import os
 import sqlite3
 from datetime import date
 import unittest
+from unittest.mock import patch
 
 from dlc_mcp.assets import AssetStore, decode_task_code_info
 
@@ -418,6 +420,31 @@ class AssetStoreTest(unittest.TestCase):
         self.assertEqual(coverage["layers"][0]["layer"], "ads")
         self.assertEqual(coverage["layers"][0]["tables_with_quality_rules"], 1)
         self.assertEqual(coverage["layers"][1]["layer"], "dws")
+
+    def test_sync_health_exposes_task_run_window(self):
+        store = make_store()
+        with patch.dict(
+            os.environ,
+            {
+                "WEDATA_INSTANCE_START": "2026-07-13 00:00:00",
+                "WEDATA_INSTANCE_END": "2026-07-13 23:59:59",
+                "WEDATA_INSTANCE_TIMEZONE": "UTC+8",
+                "WEDATA_INSTANCE_KEYWORDS": "daily",
+                "DLC_MCP_TASK_RUN_RETENTION_DAYS": "7",
+            },
+        ):
+            health = store.get_sync_health()
+
+        self.assertEqual(
+            health["task_run_window"],
+            {
+                "start": "2026-07-13 00:00:00",
+                "end": "2026-07-13 23:59:59",
+                "timezone": "UTC+8",
+                "keywords": "daily",
+                "retention_days": 7,
+            },
+        )
 
     def test_asset_coverage_gaps_filter_by_type_and_layer(self):
         gaps = make_store().list_asset_coverage_gaps(gap_type="quality", layer="dws", limit=10)

@@ -1062,6 +1062,7 @@ class AssetStore:
             "counts": counts,
             "coverage_ratios": coverage_ratios,
             "coverage_thresholds": thresholds,
+            "task_run_window": _task_run_window_from_env(),
             "latest_signals": signals,
             "gaps": gaps,
             "notes": [
@@ -3367,6 +3368,16 @@ def _normalize_gap_type(gap_type):
         "source": "data_source",
     }
     return aliases.get((gap_type or "").strip().lower(), "")
+
+
+def _task_run_window_from_env():
+    return {
+        "start": os.environ.get("WEDATA_INSTANCE_START", ""),
+        "end": os.environ.get("WEDATA_INSTANCE_END", ""),
+        "timezone": os.environ.get("WEDATA_INSTANCE_TIMEZONE", "UTC+8"),
+        "keywords": os.environ.get("WEDATA_INSTANCE_KEYWORDS", ""),
+        "retention_days": int(os.environ.get("DLC_MCP_TASK_RUN_RETENTION_DAYS", "7") or 7),
+    }
 
 
 def _coverage_ratio(numerator, denominator):
