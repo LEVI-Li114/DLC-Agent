@@ -50,6 +50,18 @@ Core-table and asset-value scoring are documented in [docs/core-table-model.md](
 
 Ordinary user access and token handling are documented in [docs/user-access.md](docs/user-access.md).
 
+## Query Mode
+
+The default user-facing server runs in query mode:
+
+```text
+cache first -> live fallback -> write local cache -> return result
+```
+
+For normal query tools, `dlc-mcp` reads SQLite first. If the cached fact is missing or incomplete and live WeData credentials are configured on the trusted server, it calls the corresponding read-only Tencent Cloud/WeData API, imports the response into the local SQLite cache, then reads SQLite again and returns that refreshed result. Passing `live=true` keeps its existing meaning: force a live refresh instead of fallback-only behavior.
+
+Query mode does not mutate remote WeData/DLC business objects. It may read remote metadata/code/project facts and update the local SQLite cache. Tools are advertised with MCP `readOnlyHint` annotations so clients that support tool annotations can make safer auto-approval decisions, but confirmation prompts are still controlled by each MCP Host.
+
 ## Tools
 
 Update this list whenever a new MCP tool is added.
@@ -98,7 +110,7 @@ Update this list whenever a new MCP tool is added.
 | `get_asset_governance_daily_report(instance_date, layer, core_level)` | Return a daily governance patrol report. |
 | `is_core_table(table_name)` | Explain whether a table is core and why. |
 
-The project, member, task-relation, and table-detail tools use the same cache-first model as the existing asset tools. Set `live=true` to refresh the requested fact from WeData. `GetTable` requires a real table GUID; the service does not infer a table name from a task name.
+The project, member, task-relation, and table-detail tools use the same query-mode cache-first model as the existing asset tools. By default they read SQLite first and live-refresh only when the cached fact is missing or incomplete. Set `live=true` to force-refresh the requested fact from WeData. `GetTable` requires a real table GUID for live refresh; the service does not infer a table name from a task name.
 
 Asset completeness must be checked with `get_sync_health`, `get_asset_coverage`, and `list_asset_coverage_gaps`. A successful API backfill only proves that the corresponding facts were collected; it does not prove that fields, lineage, quality rules, task mappings, runs, and data-source links are complete for every table.
 

@@ -242,6 +242,7 @@ def handle_request(store, request, live=None):
                 "name": name,
                 "description": spec["description"],
                 "inputSchema": spec["schema"],
+                "annotations": spec.get("annotations", {"readOnlyHint": True}),
             }
             for name, spec in TOOLS.items()
         ]
@@ -251,6 +252,25 @@ def handle_request(store, request, live=None):
     if method == "notifications/initialized":
         return None
     return _error(request, -32601, "method_not_found")
+
+
+def _live_fallback(args, data, predicate):
+    return args.get("live") or predicate(data)
+
+
+def _has_error(data):
+    return bool(data.get("error"))
+
+
+def _empty_list(key):
+    return lambda data: _has_error(data) or not data.get(key)
+
+
+def _table_detail_incomplete(data):
+    if _has_error(data):
+        return True
+    table = data.get("table") or {}
+    return not table.get("guid") or not data.get("columns")
 
 
 def _call_tool(store, request, live=None):
@@ -264,59 +284,62 @@ def _call_tool(store, request, live=None):
         data = store.search_assets(args["query"])
     elif name == "search_tasks":
         data = store.search_tasks(args["query"])
-        if live and (args.get("live") or not data["results"]):
+        if live and _live_fallback(args, data, _empty_list("results")):
             live.sync_tasks(args["query"])
             data = store.search_tasks(args["query"])
     elif name == "get_table_profile":
         data = store.get_table_profile(args["table_name"])
-        if live and (args.get("live") or data.get("error") or not data.get("columns")):
+        if live and _live_fallback(args, data, lambda item: _has_error(item) or not item.get("columns")):
             live.sync_table(args["table_name"])
             data = store.get_table_profile(args["table_name"])
     elif name == "get_table_partition_profile":
         data = store.get_table_partition_profile(args["table_name"], args.get("partition_date", ""))
     elif name == "get_table_readiness":
         data = store.get_table_readiness(args["table_name"])
-        if live and (args.get("live") or data.get("error") or data.get("score", 0) < 80):
+        if live and _live_fallback(args, data, lambda item: _has_error(item) or item.get("score", 0) < 80):
             live.sync_table(args["table_name"])
             data = store.get_table_readiness(args["table_name"])
     elif name == "get_table_production_status":
         data = store.get_table_production_status(args["table_name"], args.get("instance_date", ""))
-        if live and (args.get("live") or data.get("error") or data.get("status") in {"not_run", "unknown"}):
+        if live and _live_fallback(args, data, lambda item: _has_error(item) or item.get("status") in {"not_run", "unknown"}):
             live.sync_table(args["table_name"])
             data = store.get_table_production_status(args["table_name"], args.get("instance_date", ""))
     elif name == "get_table_production_risk_detail":
         data = store.get_table_production_risk_detail(args["table_name"], args.get("instance_date", ""))
-        if live and (args.get("live") or data.get("error") or data.get("status") in {"not_run", "unknown"}):
+        if live and _live_fallback(args, data, lambda item: _has_error(item) or item.get("status") in {"not_run", "unknown"}):
             live.sync_table(args["table_name"])
             data = store.get_table_production_risk_detail(args["table_name"], args.get("instance_date", ""))
     elif name == "list_table_production_risks":
         data = store.list_table_production_risks(args.get("layer", ""), args.get("core_level", ""), args.get("instance_date", ""), args.get("status", ""), args.get("limit", 50))
     elif name == "list_table_columns":
         data = store.list_table_columns(args["table_name"])
-        if live and (args.get("live") or data.get("error") or not data.get("columns")):
+        if live and _live_fallback(args, data, _empty_list("columns")):
             live.sync_table(args["table_name"])
             data = store.list_table_columns(args["table_name"])
     elif name == "get_quality_status":
         data = store.get_quality_status(args["table_name"])
-        if live and args.get("live"):
+        if live and _live_fallback(args, data, lambda item: _has_error(item) or not item.get("has_quality_monitoring")):
             live.sync_table(args["table_name"])
             data = store.get_quality_status(args["table_name"])
     elif name == "get_table_lineage":
         data = store.get_table_lineage(args["table_name"])
-        if live and (args.get("live") or not data["downstream"]):
+        if live and _live_fallback(args, data, lambda item: not item.get("downstream")):
             live.sync_table(args["table_name"])
             data = store.get_table_lineage(args["table_name"])
     elif name == "get_table_tasks":
         data = store.get_table_tasks(args["table_name"])
+        if live and _live_fallback(args, data, _empty_list("tasks")):
+            live.sync_table(args["table_name"])
+            data = store.get_table_tasks(args["table_name"])
     elif name == "get_task_runs":
         if args.get("task_name"):
             data = store.get_task_runs_by_name(args["task_name"], args.get("limit", 10), args.get("instance_date", ""))
-            if live and (args.get("live") or not data.get("runs")):
+            if live and _live_fallback(args, data, _empty_list("runs")):
                 live.sync_task_runs(task_name=args["task_name"], instance_date=args.get("instance_date", ""))
                 data = store.get_task_runs_by_name(args["task_name"], args.get("limit", 10), args.get("instance_date", ""))
         else:
             data = store.get_task_runs(args["task_id"], args.get("limit", 10), args.get("instance_date", ""))
-            if live and (args.get("live") or not data.get("runs")):
+            if live and _live_fallback(args, data, _empty_list("runs")):
                 live.sync_task_runs(task_id=args["task_id"], instance_date=args.get("instance_date", ""))
                 data = store.get_task_runs(args["task_id"], args.get("limit", 10), args.get("instance_date", ""))
     elif name == "get_task_code":
@@ -325,62 +348,62 @@ def _call_tool(store, request, live=None):
         else:
             project_id = os.environ.get("WEDATA_PROJECT_ID", "")
             data = store.get_task_code(project_id, args.get("task_id", ""), args.get("task_name", ""))
-            if live and (args.get("live") or data.get("error") == "task_code_not_found" or (args.get("task_name") and data.get("error") == "task_not_found")):
+            if live and _live_fallback(args, data, lambda item: item.get("error") in {"task_code_not_found", "task_not_found"}):
                 live.sync_task_code(task_id=args.get("task_id", ""), task_name=args.get("task_name", ""), project_id=project_id)
                 data = store.get_task_code(project_id, args.get("task_id", ""), args.get("task_name", ""))
     elif name == "list_data_sources":
         data = store.list_data_sources(args.get("query", ""))
-        if live and (args.get("live") or not data["results"]):
+        if live and _live_fallback(args, data, _empty_list("results")):
             live.sync_data_sources(args.get("query", ""))
             data = store.list_data_sources(args.get("query", ""))
     elif name == "get_data_source":
         data = store.get_data_source(args["data_source_id"])
-        if live and (args.get("live") or data.get("error")):
+        if live and _live_fallback(args, data, _has_error):
             live.sync_data_sources(args["data_source_id"])
             data = store.get_data_source(args["data_source_id"])
     elif name == "list_data_source_tasks":
         data = store.list_data_source_tasks(args["data_source_id"])
-        if live and (args.get("live") or not data.get("tasks")):
+        if live and _live_fallback(args, data, _empty_list("tasks")):
             live.sync_data_sources(args["data_source_id"])
             data = store.list_data_source_tasks(args["data_source_id"])
     elif name == "get_data_source_inventory":
         data = store.get_data_source_inventory(args.get("data_source_id", ""), args.get("data_source_name", ""))
-        if live and (args.get("live") or data.get("error") or data.get("gaps", {}).get("unresolved_task_count")):
+        if live and _live_fallback(args, data, lambda item: _has_error(item) or item.get("gaps", {}).get("unresolved_task_count")):
             live.sync_data_sources(args.get("data_source_id") or args.get("data_source_name", ""))
             data = store.get_data_source_inventory(args.get("data_source_id", ""), args.get("data_source_name", ""))
     elif name == "get_table_risk_profile":
         data = store.get_table_risk_profile(args["table_name"])
-        if live and (args.get("live") or data.get("error")):
+        if live and _live_fallback(args, data, _has_error):
             live.sync_table(args["table_name"])
             data = store.get_table_risk_profile(args["table_name"])
     elif name == "get_asset_value_profile":
         data = store.get_asset_value_profile(args["table_name"])
-        if live and (args.get("live") or data.get("error")):
+        if live and _live_fallback(args, data, _has_error):
             live.sync_table(args["table_name"])
             data = store.get_asset_value_profile(args["table_name"])
     elif name == "get_asset_owner_profile":
         data = store.get_asset_owner_profile(args["table_name"])
-        if live and (args.get("live") or data.get("error") or not data.get("owner_candidates")):
+        if live and _live_fallback(args, data, lambda item: _has_error(item) or not item.get("owner_candidates")):
             live.sync_table(args["table_name"])
             data = store.get_asset_owner_profile(args["table_name"])
     elif name == "get_asset_usage_profile":
         data = store.get_asset_usage_profile(args["table_name"])
-        if live and (args.get("live") or data.get("error") or not data.get("signals")):
+        if live and _live_fallback(args, data, lambda item: _has_error(item) or not item.get("signals")):
             live.sync_table(args["table_name"])
             data = store.get_asset_usage_profile(args["table_name"])
     elif name == "get_asset_lifecycle_profile":
         data = store.get_asset_lifecycle_profile(args["table_name"])
-        if live and (args.get("live") or data.get("error") or data.get("lifecycle_status") in {"新建/待补齐", "疑似废弃"}):
+        if live and _live_fallback(args, data, lambda item: _has_error(item) or item.get("lifecycle_status") in {"新建/待补齐", "疑似废弃"}):
             live.sync_table(args["table_name"])
             data = store.get_asset_lifecycle_profile(args["table_name"])
     elif name == "get_asset_change_impact":
         data = store.get_asset_change_impact(args["table_name"], args.get("change_type", "logic_change"))
-        if live and (args.get("live") or data.get("error") or (not data.get("direct_downstream") and not data.get("affected_tasks"))):
+        if live and _live_fallback(args, data, lambda item: _has_error(item) or (not item.get("direct_downstream") and not item.get("affected_tasks"))):
             live.sync_table(args["table_name"])
             data = store.get_asset_change_impact(args["table_name"], args.get("change_type", "logic_change"))
     elif name == "get_metric_definition":
         data = store.get_metric_definition(args["table_name"])
-        if live and (args.get("live") or data.get("error") or not data.get("metric_fields")):
+        if live and _live_fallback(args, data, lambda item: _has_error(item) or not item.get("metric_fields")):
             live.sync_table(args["table_name"])
             data = store.get_metric_definition(args["table_name"])
     elif name == "list_quality_gaps":
@@ -391,7 +414,7 @@ def _call_tool(store, request, live=None):
         data = store.list_expert_review_queue(args.get("layer", ""), args.get("limit", 50))
     elif name == "list_projects":
         data = store.list_projects(args.get("query", ""))
-        if live and (args.get("live") or not data.get("results")):
+        if live and _live_fallback(args, data, _empty_list("results")):
             live.sync_projects(args.get("query", ""))
             data = store.list_projects(args.get("query", ""))
     elif name == "get_project":
@@ -400,7 +423,7 @@ def _call_tool(store, request, live=None):
             data = _error_data("missing_project_id")
         else:
             data = store.get_project(project_id)
-            if live and (args.get("live") or data.get("error")):
+            if live and _live_fallback(args, data, _has_error):
                 live.sync_project(project_id)
                 data = store.get_project(project_id)
     elif name == "list_project_members":
@@ -409,7 +432,7 @@ def _call_tool(store, request, live=None):
             data = _error_data("missing_project_id")
         else:
             data = store.list_project_members(project_id)
-            if live and (args.get("live") or not data.get("members")):
+            if live and _live_fallback(args, data, _empty_list("members")):
                 live.sync_project_members(project_id)
                 data = store.list_project_members(project_id)
     elif name == "list_downstream_tasks":
@@ -418,7 +441,7 @@ def _call_tool(store, request, live=None):
             data = _error_data("missing_project_id")
         else:
             data = store.list_task_relations(project_id, args["task_id"], "downstream")
-            if live and (args.get("live") or not data.get("relations")):
+            if live and _live_fallback(args, data, _empty_list("relations")):
                 live.sync_task_relations(args["task_id"], "downstream", project_id)
                 data = store.list_task_relations(project_id, args["task_id"], "downstream")
     elif name == "list_upstream_tasks":
@@ -427,7 +450,7 @@ def _call_tool(store, request, live=None):
             data = _error_data("missing_project_id")
         else:
             data = store.list_task_relations(project_id, args["task_id"], "upstream")
-            if live and (args.get("live") or not data.get("relations")):
+            if live and _live_fallback(args, data, _empty_list("relations")):
                 live.sync_task_relations(args["task_id"], "upstream", project_id)
                 data = store.list_task_relations(project_id, args["task_id"], "upstream")
     elif name == "get_table":
@@ -438,7 +461,7 @@ def _call_tool(store, request, live=None):
         else:
             data = store.get_table_detail(table_name, table_guid)
             cached_guid = table_guid or (data.get("table") or {}).get("guid", "")
-            if live and args.get("live"):
+            if live and _live_fallback(args, data, _table_detail_incomplete):
                 if cached_guid:
                     live.sync_table_detail(table_guid=cached_guid)
                     data = store.get_table_detail(table_name, cached_guid)

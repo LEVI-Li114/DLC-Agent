@@ -193,8 +193,10 @@ class McpTest(unittest.TestCase):
 
     def test_tools_list_includes_get_task_code(self):
         response = handle_request(self.store, {"jsonrpc": "2.0", "id": 40, "method": "tools/list"})
-        names = [tool["name"] for tool in response["result"]["tools"]]
-        self.assertIn("get_task_code", names)
+        tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+        self.assertIn("get_task_code", tools)
+        self.assertEqual(tools["get_task_code"]["annotations"], {"readOnlyHint": True})
+        self.assertEqual(tools["search_tasks"]["annotations"], {"readOnlyHint": True})
 
     def test_get_task_code_returns_cached_sql(self):
         self.store.upsert_task_code(
@@ -242,6 +244,46 @@ class McpTest(unittest.TestCase):
         self.assertIn("base64", text)
         self.assertIn("GetTaskCode", [action for action, payload in client.calls])
 
+    def test_get_task_code_query_mode_falls_back_live_on_cache_miss(self):
+        client = FakeWeDataClient()
+        with patch.dict(os.environ, {"WEDATA_PROJECT_ID": "project"}, clear=False):
+            live = LiveWeData(self.store, client=client)
+            response = handle_request(
+                self.store,
+                {"jsonrpc": "2.0", "id": 45, "method": "tools/call", "params": {"name": "get_task_code", "arguments": {"task_id": "task_001"}}},
+                live=live,
+            )
+
+        text = response["result"]["content"][0]["text"]
+        cached = self.store.get_task_code(project_id="project", task_id="task_001")
+        self.assertIn("select * from dim_customer;", text)
+        self.assertEqual(cached["code_text"], "select * from dim_customer;")
+        self.assertIn("GetTaskCode", [action for action, payload in client.calls])
+
+    def test_get_task_code_query_mode_uses_cache_without_live_call(self):
+        self.store.upsert_task_code(
+            "project",
+            "task_001",
+            "build_dim_customer",
+            "c2VsZWN0IDE7",
+            "select 1;",
+            9,
+            "base64",
+            {"CodeInfo": "c2VsZWN0IDE7", "CodeFileSize": 9},
+        )
+        client = FakeWeDataClient()
+        with patch.dict(os.environ, {"WEDATA_PROJECT_ID": "project"}, clear=False):
+            live = LiveWeData(self.store, client=client)
+            response = handle_request(
+                self.store,
+                {"jsonrpc": "2.0", "id": 46, "method": "tools/call", "params": {"name": "get_task_code", "arguments": {"task_id": "task_001"}}},
+                live=live,
+            )
+
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("select 1;", text)
+        self.assertNotIn("GetTaskCode", [action for action, payload in client.calls])
+
     def test_get_task_code_resolves_cached_task_name(self):
         self.store.upsert_task_code(
             "project",
@@ -277,6 +319,35 @@ class McpTest(unittest.TestCase):
         self.assertIn("data-platform", get_response["result"]["content"][0]["text"])
         self.assertIn("项目成员", members_response["result"]["content"][0]["text"])
         self.assertIn("zhangsan", members_response["result"]["content"][0]["text"])
+
+    def test_list_projects_query_mode_falls_back_live_on_empty_cache(self):
+        client = FakeWeDataClient()
+        with patch.dict(os.environ, {"WEDATA_PROJECT_ID": "project"}, clear=False):
+            live = LiveWeData(self.store, client=client)
+            response = handle_request(
+                self.store,
+                {"jsonrpc": "2.0", "id": 47, "method": "tools/call", "params": {"name": "list_projects", "arguments": {"query": "prod"}}},
+                live=live,
+            )
+
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("项目列表", text)
+        self.assertIn("prod", text)
+        self.assertIn("ListProjects", [action for action, payload in client.calls])
+
+    def test_search_tasks_query_mode_falls_back_live_on_empty_cache(self):
+        client = FakeWeDataClient()
+        with patch.dict(os.environ, {"WEDATA_PROJECT_ID": "project"}, clear=False):
+            live = LiveWeData(self.store, client=client)
+            response = handle_request(
+                self.store,
+                {"jsonrpc": "2.0", "id": 48, "method": "tools/call", "params": {"name": "search_tasks", "arguments": {"query": "m2c_ods_cloud_cost_aliyun_day_di"}}},
+                live=live,
+            )
+
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("m2c_ods_cloud_cost_aliyun_day_di", text)
+        self.assertIn("ListTasks", [action for action, payload in client.calls])
 
     def test_calls_task_relation_and_get_table_tools_from_cache(self):
         self.store.replace_task_relations("project", "task_001", "downstream", [{"related_task_id": "task_002", "related_task_name": "build_ads_customer"}])
