@@ -6,7 +6,7 @@ from collections import Counter
 
 from .assets import AssetStore
 
-LAYER_VALUES = {"ods", "dim", "dwd", "dws", "ads"}
+LAYER_VALUES = {"ods", "dim", "dwd", "dws", "mid", "ads"}
 RAW_FILES = {
     "tables": "wedata_tables.json",
     "metadata": "wedata_metadata.json",

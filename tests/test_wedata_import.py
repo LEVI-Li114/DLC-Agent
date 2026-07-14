@@ -878,6 +878,26 @@ class WeDataImportTest(unittest.TestCase):
 
         self.assertEqual([table["layer"] for table in snapshot["tables"]], ["ads", "dws", "dwd"])
 
+    def test_infers_mid_layer_from_name_database_path_and_aliases(self):
+        snapshot = snapshot_from_api_dump(
+            {
+                "tables": {
+                    "Response": {
+                        "Data": {
+                            "Items": [
+                                {"Name": "mid_customer_profile_di"},
+                                {"Name": "customer_profile", "DatabaseName": "warehouse_mid"},
+                                {"Name": "seat_daily", "FolderPath": "/warehouse/mid/finance"},
+                                {"Name": "order_detail", "BizLayer": "mid"},
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+
+        self.assertEqual([table["layer"] for table in snapshot["tables"]], ["mid", "mid", "mid", "mid"])
+
     def test_normalizes_db_prefixed_task_tables(self):
         snapshot = snapshot_from_api_dump(
             {

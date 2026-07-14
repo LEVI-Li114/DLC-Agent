@@ -178,6 +178,10 @@ def _task_schedule_desc(item):
     return " ".join(str(part) for part in parts if part)
 
 
+WAREHOUSE_LAYERS = ("ods", "dim", "dwd", "dws", "mid", "ads")
+WAREHOUSE_LAYER_SET = set(WAREHOUSE_LAYERS)
+
+
 INPUT_TABLE_FIELDS = (
     "Inputs",
     "InputTables",
@@ -658,7 +662,7 @@ def _layer_from_text(value):
     text = str(value or "").lower().replace("-", "_").replace("/", "_").replace(".", "_")
     parts = [part for part in text.split("_") if part]
     for part in parts:
-        if part in {"ods", "dim", "dwd", "dws", "ads"}:
+        if part in WAREHOUSE_LAYER_SET:
             return part
     return ""
 
