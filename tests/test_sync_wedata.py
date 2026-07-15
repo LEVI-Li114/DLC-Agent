@@ -8,7 +8,24 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from dlc_mcp.assets import AssetStore
-from dlc_mcp.sync_wedata import _catalog_table_names, _filter_new_asset_tables, _instance_window, _item_dates, _list_all, _metadata_table_count, _partition_payload, _sync_data_source_tasks, _sync_metadata, _sync_partitions, main, partition_payload_candidates
+from dlc_mcp.sync_wedata import (
+    _catalog_table_names,
+    _filter_new_asset_tables,
+    _instance_window,
+    _item_dates,
+    _list_all,
+    _metadata_table_count,
+    _partition_payload,
+    _sync_data_source_tasks,
+    _sync_metadata,
+    _sync_partitions,
+    _table_change_date_fields,
+    _table_change_end,
+    _table_change_start,
+    _table_change_strict,
+    main,
+    partition_payload_candidates,
+)
 
 
 class FakeClient:
@@ -239,6 +256,36 @@ class SyncWeDataTest(unittest.TestCase):
 
         self.assertEqual(_catalog_table_names(response), ["ads_bill_company_1d_di", "dws_360_fin_job_seat_1d_di"])
 
+    def test_table_change_aliases_prefer_new_env_names(self):
+        with patch.dict(
+            os.environ,
+            {
+                "WEDATA_CHANGED_TABLE_START": "2026-07-14",
+                "WEDATA_NEW_ASSET_START": "2026-07-01",
+                "WEDATA_CHANGED_TABLE_END": "2026-07-15",
+                "WEDATA_NEW_ASSET_END": "2026-07-02",
+                "WEDATA_TABLE_CHANGE_DATE_FIELDS": "structure_update,update",
+                "WEDATA_NEW_ASSET_DATE_FIELDS": "create",
+                "WEDATA_TABLE_CHANGE_STRICT": "0",
+                "WEDATA_NEW_ASSET_STRICT": "1",
+            },
+            clear=False,
+        ):
+            self.assertEqual(_table_change_start(), "2026-07-14")
+            self.assertEqual(_table_change_end(), "2026-07-15")
+            self.assertEqual(_table_change_date_fields(), "structure_update,update")
+            self.assertEqual(_table_change_strict(), "0")
+
+    def test_table_change_date_fields_default_to_structure_update_update_create(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(_table_change_date_fields(), "structure_update,update,create")
+
+    def test_item_dates_reads_structure_update_alias_by_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            dates = _item_dates({"StructUpdateTime": "2026-07-14 03:04:05"})
+
+        self.assertEqual([str(value) for value in dates], ["2026-07-14"])
+
     def test_metadata_sync_prints_progress(self):
         output = StringIO()
         with TemporaryDirectory() as tmpdir, redirect_stdout(output):
@@ -266,7 +313,7 @@ class SyncWeDataTest(unittest.TestCase):
             "updated_table": {"Name": "updated_table", "CreateTime": "2026-07-01 10:00:00", "UpdateTime": "2026-07-08 11:00:00"},
         }
 
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(os.environ, {"WEDATA_NEW_ASSET_DATE_FIELDS": "create"}, clear=True):
             names = _filter_new_asset_tables(["new_table", "old_table", "updated_table"], tables, "2026-07-08", "2026-07-08")
 
         self.assertEqual(names, ["new_table"])

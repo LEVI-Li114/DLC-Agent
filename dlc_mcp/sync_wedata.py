@@ -40,8 +40,10 @@ def main():
         print(f"saved raw table catalog dump to {tables_path}", flush=True)
 
     if os.environ.get("WEDATA_SYNC_METADATA") == "1":
-        if os.environ.get("WEDATA_NEW_ASSET_START") and os.environ.get("WEDATA_NEW_ASSET_END"):
-            table_names = _filter_new_asset_tables(table_names, catalog_tables, os.environ["WEDATA_NEW_ASSET_START"], os.environ["WEDATA_NEW_ASSET_END"])
+        table_change_start = _table_change_start()
+        table_change_end = _table_change_end()
+        if table_change_start and table_change_end:
+            table_names = _filter_new_asset_tables(table_names, catalog_tables, table_change_start, table_change_end)
         metadata_dump = _sync_metadata(client, project_id, table_names, page_size, work_dir, catalog_tables)
         dump.update(_merge_metadata_dump(dump, metadata_dump))
 
@@ -518,15 +520,39 @@ def _metadata_table_count(metadata_dump):
     return _response_item_count(metadata_dump.get("tables", {}))
 
 
+def _env_first(*names, default=""):
+    for name in names:
+        value = os.environ.get(name)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def _table_change_start():
+    return _env_first("WEDATA_CHANGED_TABLE_START", "WEDATA_NEW_ASSET_START")
+
+
+def _table_change_end():
+    return _env_first("WEDATA_CHANGED_TABLE_END", "WEDATA_NEW_ASSET_END")
+
+
+def _table_change_date_fields():
+    return _env_first("WEDATA_TABLE_CHANGE_DATE_FIELDS", "WEDATA_NEW_ASSET_DATE_FIELDS", default="structure_update,update,create")
+
+
+def _table_change_strict():
+    return _env_first("WEDATA_TABLE_CHANGE_STRICT", "WEDATA_NEW_ASSET_STRICT", default="1")
+
+
 def _filter_new_asset_tables(table_names, catalog_tables, start, end):
     if not catalog_tables:
-        if os.environ.get("WEDATA_NEW_ASSET_STRICT", "1") == "1":
-            raise RuntimeError("WEDATA_NEW_ASSET_START requires WEDATA_SYNC_TABLE_CATALOG=1")
+        if _table_change_strict() == "1":
+            raise RuntimeError("WEDATA_CHANGED_TABLE_START requires WEDATA_SYNC_TABLE_CATALOG=1")
         return []
     window_start = _parse_date(start)
     window_end = _parse_date(end)
-    if not any(_item_dates(item) for item in catalog_tables.values()) and os.environ.get("WEDATA_NEW_ASSET_STRICT", "1") == "1":
-        raise RuntimeError("ListTable response has no recognized create/update time fields for new asset sync")
+    if not any(_item_dates(item) for item in catalog_tables.values()) and _table_change_strict() == "1":
+        raise RuntimeError("ListTable response has no recognized create/update/structure_update time fields for changed asset sync")
     names = set(table_names)
     return sorted(
         name
@@ -537,7 +563,7 @@ def _filter_new_asset_tables(table_names, catalog_tables, start, end):
 
 def _item_dates(item):
     dates = []
-    date_groups = {part.strip().lower() for part in os.environ.get("WEDATA_NEW_ASSET_DATE_FIELDS", "create").split(",") if part.strip()}
+    date_groups = {part.strip().lower() for part in _table_change_date_fields().split(",") if part.strip()}
     fields = []
     if "create" in date_groups:
         fields.extend(("CreateTime", "CreateDate", "CreatedAt", "CreateAt", "GmtCreate"))
