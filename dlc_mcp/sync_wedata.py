@@ -38,6 +38,7 @@ def main():
             changed_task_relations, relation_failures = _sync_changed_task_relations(client, project_id, changed_tasks, page_size)
             dump["changed_task_codes"] = changed_task_codes
             dump["changed_task_relations"] = changed_task_relations
+            _merge_task_relation_maps_into_dump(dump, project_id, changed_task_relations)
             dump["task_enrichment_failures"] = [*code_failures, *relation_failures]
             if dump["task_enrichment_failures"]:
                 print(f"changed task enrichment failures: {len(dump['task_enrichment_failures'])}", flush=True)
@@ -106,6 +107,25 @@ def main():
 
     store = AssetStore(sqlite3.connect(db_path))
     store.init_schema()
+    repair_tasks = _repair_task_targets_from_env(store)
+    if repair_tasks:
+        print(f"repairing {len(repair_tasks)} WeData task targets", flush=True)
+        repair_definitions = _enrich_changed_task_definitions(client, project_id, repair_tasks, page_size)
+        dump["tasks"] = _merge_task_responses(dump.get("tasks", {}), repair_definitions)
+        repair_codes, repair_code_failures = _sync_changed_task_codes(client, project_id, repair_tasks)
+        repair_relations, repair_relation_failures = _sync_changed_task_relations(client, project_id, repair_tasks, page_size)
+        repair_runs, repair_run_failures = _sync_repair_task_runs(client, project_id, repair_tasks, page_size)
+        dump["repair_task_codes"] = repair_codes
+        dump["repair_task_relations"] = repair_relations
+        dump["repair_task_runs"] = repair_runs
+        _merge_task_relation_maps_into_dump(dump, project_id, repair_relations)
+        _merge_task_run_maps_into_dump(dump, repair_runs)
+        dump["task_enrichment_failures"] = [
+            *dump.get("task_enrichment_failures", []),
+            *repair_code_failures,
+            *repair_relation_failures,
+            *repair_run_failures,
+        ]
     import_wedata_snapshot(store, snapshot_from_api_dump(dump))
     retention = store.prune_task_runs(int(os.environ.get("DLC_MCP_TASK_RUN_RETENTION_DAYS", "7")))
 
@@ -375,6 +395,29 @@ def _task_identity(item):
     return task_id, task_name
 
 
+def _repair_task_targets_from_env(store):
+    limit = int(os.environ.get("WEDATA_REPAIR_TASK_LIMIT", "200"))
+    targets = []
+    seen = set()
+
+    def add_target(task_id, task_name=""):
+        key = task_id or task_name
+        if not key or key in seen:
+            return
+        seen.add(key)
+        targets.append({"TaskId": task_id, "TaskName": task_name})
+
+    for task_id in [part.strip() for part in os.environ.get("WEDATA_REPAIR_TASK_IDS", "").split(",") if part.strip()]:
+        add_target(task_id, "")
+
+    for table_name in [part.strip() for part in os.environ.get("WEDATA_REPAIR_TABLES", "").split(",") if part.strip()]:
+        table_tasks = store.get_table_tasks(table_name).get("tasks") or []
+        for task in table_tasks:
+            add_target(str(task.get("id") or task.get("task_id") or ""), task.get("name") or task.get("task_name") or "")
+
+    return targets[:limit]
+
+
 def _enrich_changed_task_definitions(client, project_id, changed_tasks, page_size, progress_every=20):
     definitions = []
     total = len(changed_tasks)
@@ -429,6 +472,48 @@ def _sync_changed_task_relations(client, project_id, changed_tasks, page_size):
             except Exception as exc:
                 failures.append({"task_id": task_id, "task_name": task_name, "action": action, "error": str(exc)})
     return relations, failures
+
+
+def _merge_task_relation_maps_into_dump(dump, project_id, relation_maps):
+    existing = dump.get("task_relations") if isinstance(dump.get("task_relations"), dict) else {}
+    for direction, by_task in (relation_maps or {}).items():
+        for task_id, response in by_task.items():
+            existing[f"{project_id}:{task_id}:{direction}"] = response
+    if existing:
+        dump["task_relations"] = existing
+
+
+def _merge_task_run_maps_into_dump(dump, run_maps):
+    items = []
+    current = dump.get("task_instances")
+    if isinstance(current, dict):
+        items.extend(current.get("Response", {}).get("Data", {}).get("Items") or [])
+    for response in (run_maps or {}).values():
+        items.extend(response.get("Response", {}).get("Data", {}).get("Items") or [])
+    if items:
+        dump["task_instances"] = {"Response": {"Data": {"Items": items}}}
+
+
+def _sync_repair_task_runs(client, project_id, repair_tasks, page_size):
+    responses = {}
+    failures = []
+    start_time, end_time = _instance_window()
+    for item in repair_tasks:
+        task_id, task_name = _task_identity(item)
+        if not task_id:
+            continue
+        payload = {
+            "ProjectId": project_id,
+            "TaskId": task_id,
+            "ScheduleTimeFrom": start_time,
+            "ScheduleTimeTo": end_time,
+            "TimeZone": os.environ.get("WEDATA_INSTANCE_TIMEZONE", "UTC+8"),
+        }
+        try:
+            responses[task_id] = _list_all(client, "ListTaskInstances", payload, page_size)
+        except Exception as exc:
+            failures.append({"task_id": task_id, "task_name": task_name, "action": "ListTaskInstances", "error": str(exc)})
+    return responses, failures
 
 
 def _sync_partitions(client, project_id, table_names, page_size, progress_every=10, catalog_tables=None):

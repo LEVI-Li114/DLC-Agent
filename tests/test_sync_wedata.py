@@ -19,10 +19,12 @@ from dlc_mcp.sync_wedata import (
     _merge_task_responses,
     _metadata_table_count,
     _partition_payload,
+    _repair_task_targets_from_env,
     _sync_changed_task_codes,
     _sync_changed_task_relations,
     _sync_data_source_tasks,
     _sync_metadata,
+    _sync_repair_task_runs,
     _sync_partitions,
     _table_change_date_fields,
     _table_change_end,
@@ -210,6 +212,22 @@ class FakeChangedTaskClient:
             return {"Response": {"Data": {"Items": [{"TaskId": "task_down", "TaskName": "downstream"}], "TotalPageNumber": 1}}}
         if action == "GetTask":
             return {"Response": {"Data": {"TaskId": payload.get("TaskId"), "TaskName": "changed_task"}}}
+        if action == "ListTaskInstances":
+            return {
+                "Response": {
+                    "Data": {
+                        "Items": [
+                            {
+                                "TaskId": payload.get("TaskId"),
+                                "InstanceId": "inst_repair",
+                                "InstanceDate": "2026-07-14",
+                                "Status": "COMPLETED",
+                            }
+                        ],
+                        "TotalPageNumber": 1,
+                    }
+                }
+            }
         return {"Response": {"Data": {"Items": [], "TotalPageNumber": 1}}}
 
 
@@ -410,6 +428,48 @@ class SyncWeDataTest(unittest.TestCase):
         self.assertIn("task_1", relations["downstream"])
         self.assertIn("ListUpstreamTasks", [action for action, payload in client.calls])
         self.assertIn("ListDownstreamTasks", [action for action, payload in client.calls])
+
+    def test_repair_task_targets_reads_direct_task_ids_and_table_related_tasks(self):
+        conn = sqlite3.connect(":memory:")
+        store = AssetStore(conn)
+        store.init_schema()
+        store.upsert_table({"name": "ads_repair", "layer": "ads"})
+        store.upsert_task({"id": "task_from_table", "name": "build_ads_repair", "outputs": ["ads_repair"]})
+        with patch.dict(
+            os.environ,
+            {
+                "WEDATA_REPAIR_TASK_IDS": "task_direct,task_extra",
+                "WEDATA_REPAIR_TABLES": "ads_repair",
+                "WEDATA_REPAIR_TASK_LIMIT": "10",
+            },
+            clear=False,
+        ):
+            targets = _repair_task_targets_from_env(store)
+
+        self.assertEqual(
+            sorted((item["TaskId"], item["TaskName"]) for item in targets),
+            [("task_direct", ""), ("task_extra", ""), ("task_from_table", "build_ads_repair")],
+        )
+
+    def test_repair_task_targets_obeys_limit(self):
+        conn = sqlite3.connect(":memory:")
+        store = AssetStore(conn)
+        store.init_schema()
+        with patch.dict(os.environ, {"WEDATA_REPAIR_TASK_IDS": "task_1,task_2,task_3", "WEDATA_REPAIR_TASK_LIMIT": "2"}, clear=False):
+            targets = _repair_task_targets_from_env(store)
+
+        self.assertEqual([item["TaskId"] for item in targets], ["task_1", "task_2"])
+
+    def test_sync_repair_task_runs_fetches_runs_for_repair_tasks(self):
+        client = FakeChangedTaskClient()
+        with patch.dict(os.environ, {"WEDATA_INSTANCE_START": "2026-07-14 00:00:00", "WEDATA_INSTANCE_END": "2026-07-14 23:59:59"}, clear=False):
+            runs, failures = _sync_repair_task_runs(client, "project", [{"TaskId": "task_1", "TaskName": "one"}], 100)
+
+        self.assertEqual(failures, [])
+        self.assertIn("task_1", runs)
+        payloads = [payload for action, payload in client.calls if action == "ListTaskInstances"]
+        self.assertEqual(payloads[0]["TaskId"], "task_1")
+        self.assertEqual(payloads[0]["ScheduleTimeFrom"], "2026-07-14 00:00:00")
 
     def test_metadata_sync_prints_progress(self):
         output = StringIO()
