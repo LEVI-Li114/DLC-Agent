@@ -571,6 +571,38 @@ class AssetStore:
             )
         self.conn.commit()
 
+    def refresh_inferred_layers(self):
+        rows = self._all(
+            """
+            select name, layer
+            from tables
+            where coalesce(layer, '') = '' or layer = 'unknown'
+            order by name
+            """
+        )
+        updated = []
+        for row in rows:
+            inferred = _infer_warehouse_layer(row["name"])
+            if not inferred:
+                continue
+            self.conn.execute(
+                """
+                update tables
+                set layer = ?
+                where name = ? and (coalesce(layer, '') = '' or layer = 'unknown')
+                """,
+                (inferred, row["name"]),
+            )
+            updated.append(
+                {
+                    "name": row["name"],
+                    "old_layer": row["layer"] or "",
+                    "new_layer": inferred,
+                }
+            )
+        self.conn.commit()
+        return {"updated_count": len(updated), "updated": updated}
+
     def upsert_column(self, table_name, name, column_type="", description="", ordinal=0):
         self.conn.execute(
             """
@@ -2819,6 +2851,14 @@ def _governance_status_counts(production_risks):
         status = item.get("status", "unknown")
         counts[status] = counts.get(status, 0) + 1
     return counts
+
+
+def _infer_warehouse_layer(value):
+    text = str(value or "").lower().replace("-", "_").replace("/", "_").replace(".", "_")
+    for part in [part for part in text.split("_") if part]:
+        if part in WAREHOUSE_LAYER_SET:
+            return part
+    return ""
 
 
 def _governance_issues_for_table(table):

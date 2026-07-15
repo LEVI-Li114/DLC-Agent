@@ -251,6 +251,33 @@ class AssetStoreTest(unittest.TestCase):
         self.assertEqual(detail["table"]["raw"]["TableName"], "ads_order_daily")
         self.assertEqual(store.get_table_detail(table_guid="guid_ads_order_daily")["table"]["name"], "ads_order_daily")
 
+    def test_refresh_inferred_layers_repairs_unknown_mid_tables(self):
+        store = make_store()
+        store.upsert_table({"name": "mid_crm_customer_df", "layer": "unknown", "owner": "tencent"})
+        store.upsert_table({"name": "mid_sms_instance_bill_detail_di", "layer": "", "owner": "tencent"})
+
+        result = store.refresh_inferred_layers()
+
+        self.assertEqual(result["updated_count"], 2)
+        self.assertEqual(
+            {item["name"]: item["new_layer"] for item in result["updated"]},
+            {
+                "mid_crm_customer_df": "mid",
+                "mid_sms_instance_bill_detail_di": "mid",
+            },
+        )
+        self.assertEqual(store.get_table_detail(table_name="mid_crm_customer_df")["table"]["layer"], "mid")
+        self.assertEqual(store.get_table_detail(table_name="mid_sms_instance_bill_detail_di")["table"]["layer"], "mid")
+
+    def test_refresh_inferred_layers_does_not_overwrite_explicit_layers(self):
+        store = make_store()
+        store.upsert_table({"name": "mid_named_but_ads_owned", "layer": "ads", "owner": "tencent"})
+
+        result = store.refresh_inferred_layers()
+
+        self.assertEqual(result["updated_count"], 0)
+        self.assertEqual(store.get_table_detail(table_name="mid_named_but_ads_owned")["table"]["layer"], "ads")
+
     def test_data_source_includes_owner_name_and_task_count(self):
         source = make_store().get_data_source("ds_001")
 
