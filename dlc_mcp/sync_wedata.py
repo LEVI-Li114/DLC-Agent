@@ -25,6 +25,23 @@ def main():
         json.dump(tasks_response, f, ensure_ascii=False, indent=2)
 
     dump = {"tasks": tasks_response}
+    changed_tasks = []
+    task_change_start = os.environ.get("WEDATA_TASK_CHANGE_START", "")
+    task_change_end = os.environ.get("WEDATA_TASK_CHANGE_END", "")
+    if task_change_start and task_change_end:
+        changed_tasks = _filter_changed_tasks(tasks_response, task_change_start, task_change_end)
+        print(f"found {len(changed_tasks)} changed WeData tasks", flush=True)
+        if changed_tasks:
+            changed_task_definitions = _enrich_changed_task_definitions(client, project_id, changed_tasks, page_size)
+            dump["tasks"] = _merge_task_responses(dump["tasks"], changed_task_definitions)
+            changed_task_codes, code_failures = _sync_changed_task_codes(client, project_id, changed_tasks)
+            changed_task_relations, relation_failures = _sync_changed_task_relations(client, project_id, changed_tasks, page_size)
+            dump["changed_task_codes"] = changed_task_codes
+            dump["changed_task_relations"] = changed_task_relations
+            _merge_task_relation_maps_into_dump(dump, project_id, changed_task_relations)
+            dump["task_enrichment_failures"] = [*code_failures, *relation_failures]
+            if dump["task_enrichment_failures"]:
+                print(f"changed task enrichment failures: {len(dump['task_enrichment_failures'])}", flush=True)
     task_snapshot = snapshot_from_api_dump(dump)
     table_names = sorted({table for task in task_snapshot["tasks"] for table in task.get("outputs", [])})
     catalog_tables = {}
@@ -40,8 +57,10 @@ def main():
         print(f"saved raw table catalog dump to {tables_path}", flush=True)
 
     if os.environ.get("WEDATA_SYNC_METADATA") == "1":
-        if os.environ.get("WEDATA_NEW_ASSET_START") and os.environ.get("WEDATA_NEW_ASSET_END"):
-            table_names = _filter_new_asset_tables(table_names, catalog_tables, os.environ["WEDATA_NEW_ASSET_START"], os.environ["WEDATA_NEW_ASSET_END"])
+        table_change_start = _table_change_start()
+        table_change_end = _table_change_end()
+        if table_change_start and table_change_end:
+            table_names = _filter_new_asset_tables(table_names, catalog_tables, table_change_start, table_change_end)
         metadata_dump = _sync_metadata(client, project_id, table_names, page_size, work_dir, catalog_tables)
         dump.update(_merge_metadata_dump(dump, metadata_dump))
 
@@ -88,6 +107,25 @@ def main():
 
     store = AssetStore(sqlite3.connect(db_path))
     store.init_schema()
+    repair_tasks = _repair_task_targets_from_env(store)
+    if repair_tasks:
+        print(f"repairing {len(repair_tasks)} WeData task targets", flush=True)
+        repair_definitions = _enrich_changed_task_definitions(client, project_id, repair_tasks, page_size)
+        dump["tasks"] = _merge_task_responses(dump.get("tasks", {}), repair_definitions)
+        repair_codes, repair_code_failures = _sync_changed_task_codes(client, project_id, repair_tasks)
+        repair_relations, repair_relation_failures = _sync_changed_task_relations(client, project_id, repair_tasks, page_size)
+        repair_runs, repair_run_failures = _sync_repair_task_runs(client, project_id, repair_tasks, page_size)
+        dump["repair_task_codes"] = repair_codes
+        dump["repair_task_relations"] = repair_relations
+        dump["repair_task_runs"] = repair_runs
+        _merge_task_relation_maps_into_dump(dump, project_id, repair_relations)
+        _merge_task_run_maps_into_dump(dump, repair_runs)
+        dump["task_enrichment_failures"] = [
+            *dump.get("task_enrichment_failures", []),
+            *repair_code_failures,
+            *repair_relation_failures,
+            *repair_run_failures,
+        ]
     import_wedata_snapshot(store, snapshot_from_api_dump(dump))
     retention = store.prune_task_runs(int(os.environ.get("DLC_MCP_TASK_RUN_RETENTION_DAYS", "7")))
 
@@ -351,6 +389,133 @@ def _merge_task_responses(primary, extra):
     return merged
 
 
+def _task_identity(item):
+    task_id = str(item.get("TaskId") or item.get("Id") or item.get("id") or item.get("task_id") or "")
+    task_name = item.get("TaskName") or item.get("Name") or item.get("name") or item.get("task_name") or ""
+    return task_id, task_name
+
+
+def _repair_task_targets_from_env(store):
+    limit = int(os.environ.get("WEDATA_REPAIR_TASK_LIMIT", "200"))
+    targets = []
+    seen = set()
+
+    def add_target(task_id, task_name=""):
+        key = task_id or task_name
+        if not key or key in seen:
+            return
+        seen.add(key)
+        targets.append({"TaskId": task_id, "TaskName": task_name})
+
+    for task_id in [part.strip() for part in os.environ.get("WEDATA_REPAIR_TASK_IDS", "").split(",") if part.strip()]:
+        add_target(task_id, "")
+
+    for table_name in [part.strip() for part in os.environ.get("WEDATA_REPAIR_TABLES", "").split(",") if part.strip()]:
+        table_tasks = store.get_table_tasks(table_name).get("tasks") or []
+        for task in table_tasks:
+            add_target(str(task.get("id") or task.get("task_id") or ""), task.get("name") or task.get("task_name") or "")
+
+    return targets[:limit]
+
+
+def _enrich_changed_task_definitions(client, project_id, changed_tasks, page_size, progress_every=20):
+    definitions = []
+    total = len(changed_tasks)
+    for index, item in enumerate(changed_tasks, start=1):
+        task_id, task_name = _task_identity(item)
+        related = {"task_id": task_id, "task_name": task_name}
+        enriched = _enrich_related_task_definition(client, project_id, dict(item), related, page_size)
+        definitions.append(enriched)
+        if progress_every and (index == total or index % progress_every == 0):
+            print(f"enriched changed tasks for {index}/{total}", flush=True)
+    return {"Response": {"Data": {"Items": definitions}}}
+
+
+def _sync_changed_task_codes(client, project_id, changed_tasks):
+    if os.environ.get("WEDATA_SYNC_CHANGED_TASK_CODES", "1") != "1":
+        return {}, []
+    limit = int(os.environ.get("WEDATA_CHANGED_TASK_CODE_LIMIT", "200"))
+    responses = {}
+    failures = []
+    for item in changed_tasks[:limit]:
+        task_id, task_name = _task_identity(item)
+        payload = {"ProjectId": project_id}
+        if task_id:
+            payload["TaskId"] = task_id
+        elif task_name:
+            payload["TaskName"] = task_name
+        else:
+            continue
+        try:
+            response = client.call("GetTaskCode", payload)
+            error = response.get("Response", {}).get("Error")
+            if error:
+                failures.append({"task_id": task_id, "task_name": task_name, "action": "GetTaskCode", "error": f"{error.get('Code')} {error.get('Message')}"})
+                continue
+            responses[task_id or task_name] = response
+        except Exception as exc:
+            failures.append({"task_id": task_id, "task_name": task_name, "action": "GetTaskCode", "error": str(exc)})
+    return responses, failures
+
+
+def _sync_changed_task_relations(client, project_id, changed_tasks, page_size):
+    relations = {"upstream": {}, "downstream": {}}
+    failures = []
+    for item in changed_tasks:
+        task_id, task_name = _task_identity(item)
+        if not task_id:
+            continue
+        for direction, action in (("upstream", "ListUpstreamTasks"), ("downstream", "ListDownstreamTasks")):
+            try:
+                response = _list_all(client, action, {"ProjectId": project_id, "TaskId": task_id}, page_size)
+                relations[direction][task_id] = response
+            except Exception as exc:
+                failures.append({"task_id": task_id, "task_name": task_name, "action": action, "error": str(exc)})
+    return relations, failures
+
+
+def _merge_task_relation_maps_into_dump(dump, project_id, relation_maps):
+    existing = dump.get("task_relations") if isinstance(dump.get("task_relations"), dict) else {}
+    for direction, by_task in (relation_maps or {}).items():
+        for task_id, response in by_task.items():
+            existing[f"{project_id}:{task_id}:{direction}"] = response
+    if existing:
+        dump["task_relations"] = existing
+
+
+def _merge_task_run_maps_into_dump(dump, run_maps):
+    items = []
+    current = dump.get("task_instances")
+    if isinstance(current, dict):
+        items.extend(current.get("Response", {}).get("Data", {}).get("Items") or [])
+    for response in (run_maps or {}).values():
+        items.extend(response.get("Response", {}).get("Data", {}).get("Items") or [])
+    if items:
+        dump["task_instances"] = {"Response": {"Data": {"Items": items}}}
+
+
+def _sync_repair_task_runs(client, project_id, repair_tasks, page_size):
+    responses = {}
+    failures = []
+    start_time, end_time = _instance_window()
+    for item in repair_tasks:
+        task_id, task_name = _task_identity(item)
+        if not task_id:
+            continue
+        payload = {
+            "ProjectId": project_id,
+            "TaskId": task_id,
+            "ScheduleTimeFrom": start_time,
+            "ScheduleTimeTo": end_time,
+            "TimeZone": os.environ.get("WEDATA_INSTANCE_TIMEZONE", "UTC+8"),
+        }
+        try:
+            responses[task_id] = _list_all(client, "ListTaskInstances", payload, page_size)
+        except Exception as exc:
+            failures.append({"task_id": task_id, "task_name": task_name, "action": "ListTaskInstances", "error": str(exc)})
+    return responses, failures
+
+
 def _sync_partitions(client, project_id, table_names, page_size, progress_every=10, catalog_tables=None):
     action = os.environ.get("WEDATA_PARTITION_ACTION", "ListTablePartitions")
     partition_date = os.environ.get("WEDATA_PARTITION_DATE", "")
@@ -518,15 +683,39 @@ def _metadata_table_count(metadata_dump):
     return _response_item_count(metadata_dump.get("tables", {}))
 
 
+def _env_first(*names, default=""):
+    for name in names:
+        value = os.environ.get(name)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def _table_change_start():
+    return _env_first("WEDATA_CHANGED_TABLE_START", "WEDATA_NEW_ASSET_START")
+
+
+def _table_change_end():
+    return _env_first("WEDATA_CHANGED_TABLE_END", "WEDATA_NEW_ASSET_END")
+
+
+def _table_change_date_fields():
+    return _env_first("WEDATA_TABLE_CHANGE_DATE_FIELDS", "WEDATA_NEW_ASSET_DATE_FIELDS", default="structure_update,update,create")
+
+
+def _table_change_strict():
+    return _env_first("WEDATA_TABLE_CHANGE_STRICT", "WEDATA_NEW_ASSET_STRICT", default="1")
+
+
 def _filter_new_asset_tables(table_names, catalog_tables, start, end):
     if not catalog_tables:
-        if os.environ.get("WEDATA_NEW_ASSET_STRICT", "1") == "1":
-            raise RuntimeError("WEDATA_NEW_ASSET_START requires WEDATA_SYNC_TABLE_CATALOG=1")
+        if _table_change_strict() == "1":
+            raise RuntimeError("WEDATA_CHANGED_TABLE_START requires WEDATA_SYNC_TABLE_CATALOG=1")
         return []
     window_start = _parse_date(start)
     window_end = _parse_date(end)
-    if not any(_item_dates(item) for item in catalog_tables.values()) and os.environ.get("WEDATA_NEW_ASSET_STRICT", "1") == "1":
-        raise RuntimeError("ListTable response has no recognized create/update time fields for new asset sync")
+    if not any(_item_dates(item) for item in catalog_tables.values()) and _table_change_strict() == "1":
+        raise RuntimeError("ListTable response has no recognized create/update/structure_update time fields for changed asset sync")
     names = set(table_names)
     return sorted(
         name
@@ -537,7 +726,7 @@ def _filter_new_asset_tables(table_names, catalog_tables, start, end):
 
 def _item_dates(item):
     dates = []
-    date_groups = {part.strip().lower() for part in os.environ.get("WEDATA_NEW_ASSET_DATE_FIELDS", "create").split(",") if part.strip()}
+    date_groups = {part.strip().lower() for part in _table_change_date_fields().split(",") if part.strip()}
     fields = []
     if "create" in date_groups:
         fields.extend(("CreateTime", "CreateDate", "CreatedAt", "CreateAt", "GmtCreate"))
@@ -551,6 +740,58 @@ def _item_dates(item):
             if value:
                 dates.append(value)
     return dates
+
+
+def _task_change_date_fields():
+    return os.environ.get("WEDATA_TASK_CHANGE_DATE_FIELDS", "update,modify,create")
+
+
+def _task_change_strict():
+    return os.environ.get("WEDATA_TASK_CHANGE_STRICT", "0")
+
+
+def _task_item_dates(item):
+    dates = []
+    date_groups = [part.strip().lower() for part in _task_change_date_fields().split(",") if part.strip()]
+    fields = []
+    for group in date_groups:
+        if group == "create":
+            fields.extend(("CreateTime", "CreateDate", "CreatedAt", "CreateAt", "GmtCreate"))
+        if group in {"update", "modify"}:
+            fields.extend(("UpdateTime", "ModifyTime", "ModifiedAt", "LastModifyTime", "UpdateDate"))
+        if group == "schedule":
+            fields.extend(("ScheduleTime", "ScheduleUpdateTime"))
+    seen_fields = set()
+    for field in fields:
+        if field in seen_fields:
+            continue
+        seen_fields.add(field)
+        if item.get(field):
+            value = _parse_date(str(item[field]))
+            if value:
+                dates.append(value)
+    return dates
+
+
+def _filter_changed_tasks(tasks_response, start, end):
+    items = tasks_response.get("Response", {}).get("Data", {}).get("Items") or []
+    if not start or not end:
+        return []
+    if not any(_task_item_dates(item) for item in items):
+        message = "ListTasks response has no recognized task change time fields; changed task enrichment skipped"
+        if _task_change_strict() == "1":
+            raise RuntimeError(message)
+        print(message, flush=True)
+        return []
+    window_start = _parse_date(start)
+    window_end = _parse_date(end)
+    changed = [
+        item
+        for item in items
+        if any(_date_in_window(value, window_start, window_end) for value in _task_item_dates(item))
+    ]
+    limit = int(os.environ.get("WEDATA_CHANGED_TASK_LIMIT", "500"))
+    return changed[:limit]
 
 
 def _parse_date(value):
