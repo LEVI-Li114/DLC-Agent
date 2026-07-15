@@ -25,6 +25,22 @@ def main():
         json.dump(tasks_response, f, ensure_ascii=False, indent=2)
 
     dump = {"tasks": tasks_response}
+    changed_tasks = []
+    task_change_start = os.environ.get("WEDATA_TASK_CHANGE_START", "")
+    task_change_end = os.environ.get("WEDATA_TASK_CHANGE_END", "")
+    if task_change_start and task_change_end:
+        changed_tasks = _filter_changed_tasks(tasks_response, task_change_start, task_change_end)
+        print(f"found {len(changed_tasks)} changed WeData tasks", flush=True)
+        if changed_tasks:
+            changed_task_definitions = _enrich_changed_task_definitions(client, project_id, changed_tasks, page_size)
+            dump["tasks"] = _merge_task_responses(dump["tasks"], changed_task_definitions)
+            changed_task_codes, code_failures = _sync_changed_task_codes(client, project_id, changed_tasks)
+            changed_task_relations, relation_failures = _sync_changed_task_relations(client, project_id, changed_tasks, page_size)
+            dump["changed_task_codes"] = changed_task_codes
+            dump["changed_task_relations"] = changed_task_relations
+            dump["task_enrichment_failures"] = [*code_failures, *relation_failures]
+            if dump["task_enrichment_failures"]:
+                print(f"changed task enrichment failures: {len(dump['task_enrichment_failures'])}", flush=True)
     task_snapshot = snapshot_from_api_dump(dump)
     table_names = sorted({table for task in task_snapshot["tasks"] for table in task.get("outputs", [])})
     catalog_tables = {}
@@ -353,6 +369,68 @@ def _merge_task_responses(primary, extra):
     return merged
 
 
+def _task_identity(item):
+    task_id = str(item.get("TaskId") or item.get("Id") or item.get("id") or item.get("task_id") or "")
+    task_name = item.get("TaskName") or item.get("Name") or item.get("name") or item.get("task_name") or ""
+    return task_id, task_name
+
+
+def _enrich_changed_task_definitions(client, project_id, changed_tasks, page_size, progress_every=20):
+    definitions = []
+    total = len(changed_tasks)
+    for index, item in enumerate(changed_tasks, start=1):
+        task_id, task_name = _task_identity(item)
+        related = {"task_id": task_id, "task_name": task_name}
+        enriched = _enrich_related_task_definition(client, project_id, dict(item), related, page_size)
+        definitions.append(enriched)
+        if progress_every and (index == total or index % progress_every == 0):
+            print(f"enriched changed tasks for {index}/{total}", flush=True)
+    return {"Response": {"Data": {"Items": definitions}}}
+
+
+def _sync_changed_task_codes(client, project_id, changed_tasks):
+    if os.environ.get("WEDATA_SYNC_CHANGED_TASK_CODES", "1") != "1":
+        return {}, []
+    limit = int(os.environ.get("WEDATA_CHANGED_TASK_CODE_LIMIT", "200"))
+    responses = {}
+    failures = []
+    for item in changed_tasks[:limit]:
+        task_id, task_name = _task_identity(item)
+        payload = {"ProjectId": project_id}
+        if task_id:
+            payload["TaskId"] = task_id
+        elif task_name:
+            payload["TaskName"] = task_name
+        else:
+            continue
+        try:
+            response = client.call("GetTaskCode", payload)
+            error = response.get("Response", {}).get("Error")
+            if error:
+                failures.append({"task_id": task_id, "task_name": task_name, "action": "GetTaskCode", "error": f"{error.get('Code')} {error.get('Message')}"})
+                continue
+            responses[task_id or task_name] = response
+        except Exception as exc:
+            failures.append({"task_id": task_id, "task_name": task_name, "action": "GetTaskCode", "error": str(exc)})
+    return responses, failures
+
+
+def _sync_changed_task_relations(client, project_id, changed_tasks, page_size):
+    relations = {"upstream": {}, "downstream": {}}
+    failures = []
+    for item in changed_tasks:
+        task_id, task_name = _task_identity(item)
+        if not task_id:
+            continue
+        for direction, action in (("upstream", "ListUpstreamTasks"), ("downstream", "ListDownstreamTasks")):
+            try:
+                response = _list_all(client, action, {"ProjectId": project_id, "TaskId": task_id}, page_size)
+                relations[direction][task_id] = response
+            except Exception as exc:
+                failures.append({"task_id": task_id, "task_name": task_name, "action": action, "error": str(exc)})
+    return relations, failures
+
+
 def _sync_partitions(client, project_id, table_names, page_size, progress_every=10, catalog_tables=None):
     action = os.environ.get("WEDATA_PARTITION_ACTION", "ListTablePartitions")
     partition_date = os.environ.get("WEDATA_PARTITION_DATE", "")
@@ -577,6 +655,58 @@ def _item_dates(item):
             if value:
                 dates.append(value)
     return dates
+
+
+def _task_change_date_fields():
+    return os.environ.get("WEDATA_TASK_CHANGE_DATE_FIELDS", "update,modify,create")
+
+
+def _task_change_strict():
+    return os.environ.get("WEDATA_TASK_CHANGE_STRICT", "0")
+
+
+def _task_item_dates(item):
+    dates = []
+    date_groups = [part.strip().lower() for part in _task_change_date_fields().split(",") if part.strip()]
+    fields = []
+    for group in date_groups:
+        if group == "create":
+            fields.extend(("CreateTime", "CreateDate", "CreatedAt", "CreateAt", "GmtCreate"))
+        if group in {"update", "modify"}:
+            fields.extend(("UpdateTime", "ModifyTime", "ModifiedAt", "LastModifyTime", "UpdateDate"))
+        if group == "schedule":
+            fields.extend(("ScheduleTime", "ScheduleUpdateTime"))
+    seen_fields = set()
+    for field in fields:
+        if field in seen_fields:
+            continue
+        seen_fields.add(field)
+        if item.get(field):
+            value = _parse_date(str(item[field]))
+            if value:
+                dates.append(value)
+    return dates
+
+
+def _filter_changed_tasks(tasks_response, start, end):
+    items = tasks_response.get("Response", {}).get("Data", {}).get("Items") or []
+    if not start or not end:
+        return []
+    if not any(_task_item_dates(item) for item in items):
+        message = "ListTasks response has no recognized task change time fields; changed task enrichment skipped"
+        if _task_change_strict() == "1":
+            raise RuntimeError(message)
+        print(message, flush=True)
+        return []
+    window_start = _parse_date(start)
+    window_end = _parse_date(end)
+    changed = [
+        item
+        for item in items
+        if any(_date_in_window(value, window_start, window_end) for value in _task_item_dates(item))
+    ]
+    limit = int(os.environ.get("WEDATA_CHANGED_TASK_LIMIT", "500"))
+    return changed[:limit]
 
 
 def _parse_date(value):

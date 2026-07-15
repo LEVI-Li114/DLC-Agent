@@ -10,12 +10,17 @@ from unittest.mock import patch
 from dlc_mcp.assets import AssetStore
 from dlc_mcp.sync_wedata import (
     _catalog_table_names,
+    _enrich_changed_task_definitions,
+    _filter_changed_tasks,
     _filter_new_asset_tables,
     _instance_window,
     _item_dates,
     _list_all,
+    _merge_task_responses,
     _metadata_table_count,
     _partition_payload,
+    _sync_changed_task_codes,
+    _sync_changed_task_relations,
     _sync_data_source_tasks,
     _sync_metadata,
     _sync_partitions,
@@ -23,6 +28,7 @@ from dlc_mcp.sync_wedata import (
     _table_change_end,
     _table_change_start,
     _table_change_strict,
+    _task_item_dates,
     main,
     partition_payload_candidates,
 )
@@ -176,6 +182,37 @@ class FakeCatalogMetadataClient(FakeMetadataClient):
         return super().call(action, payload)
 
 
+class FakeChangedTaskClient:
+    def __init__(self):
+        self.calls = []
+
+    def call(self, action, payload):
+        self.calls.append((action, dict(payload)))
+        if action == "ListProcessLineage":
+            return {
+                "Response": {
+                    "Data": {
+                        "Items": [
+                            {
+                                "Source": [{"ResourceName": "ods_source", "ResourceType": "TABLE"}],
+                                "Target": [{"ResourceName": "ads_changed_output", "ResourceType": "TABLE"}],
+                            }
+                        ],
+                        "TotalPageNumber": 1,
+                    }
+                }
+            }
+        if action == "GetTaskCode":
+            return {"Response": {"Data": {"CodeInfo": "c2VsZWN0IDE7", "CodeFileSize": 9}, "RequestId": "req"}}
+        if action == "ListUpstreamTasks":
+            return {"Response": {"Data": {"Items": [{"TaskId": "task_up", "TaskName": "upstream"}], "TotalPageNumber": 1}}}
+        if action == "ListDownstreamTasks":
+            return {"Response": {"Data": {"Items": [{"TaskId": "task_down", "TaskName": "downstream"}], "TotalPageNumber": 1}}}
+        if action == "GetTask":
+            return {"Response": {"Data": {"TaskId": payload.get("TaskId"), "TaskName": "changed_task"}}}
+        return {"Response": {"Data": {"Items": [], "TotalPageNumber": 1}}}
+
+
 class SyncWeDataTest(unittest.TestCase):
     def test_instance_window_uses_explicit_dates(self):
         with patch.dict(
@@ -285,6 +322,94 @@ class SyncWeDataTest(unittest.TestCase):
             dates = _item_dates({"StructUpdateTime": "2026-07-14 03:04:05"})
 
         self.assertEqual([str(value) for value in dates], ["2026-07-14"])
+
+    def test_task_item_dates_reads_update_modify_and_create_fields(self):
+        with patch.dict(os.environ, {"WEDATA_TASK_CHANGE_DATE_FIELDS": "update,modify,create"}, clear=False):
+            dates = _task_item_dates(
+                {
+                    "UpdateTime": "2026-07-14 11:22:33",
+                    "ModifyTime": "2026-07-15 01:02:03",
+                    "CreateTime": "2026-07-13 04:05:06",
+                }
+            )
+
+        self.assertEqual([str(value) for value in dates], ["2026-07-14", "2026-07-15", "2026-07-13"])
+
+    def test_filter_changed_tasks_uses_update_window_and_keeps_only_matching_items(self):
+        tasks_response = {
+            "Response": {
+                "Data": {
+                    "Items": [
+                        {"TaskId": "task_changed", "TaskName": "changed", "UpdateTime": "2026-07-14 10:00:00"},
+                        {"TaskId": "task_old", "TaskName": "old", "UpdateTime": "2026-07-10 10:00:00"},
+                        {"TaskId": "task_no_date", "TaskName": "no_date"},
+                    ]
+                }
+            }
+        }
+        with patch.dict(os.environ, {"WEDATA_TASK_CHANGE_DATE_FIELDS": "update", "WEDATA_TASK_CHANGE_STRICT": "0"}, clear=False):
+            changed = _filter_changed_tasks(tasks_response, "2026-07-14", "2026-07-14")
+
+        self.assertEqual([task["TaskId"] for task in changed], ["task_changed"])
+
+    def test_filter_changed_tasks_missing_dates_returns_empty_when_not_strict(self):
+        tasks_response = {"Response": {"Data": {"Items": [{"TaskId": "task_no_date", "TaskName": "no_date"}]}}}
+        with patch.dict(os.environ, {"WEDATA_TASK_CHANGE_DATE_FIELDS": "update", "WEDATA_TASK_CHANGE_STRICT": "0"}, clear=False):
+            changed = _filter_changed_tasks(tasks_response, "2026-07-14", "2026-07-14")
+
+        self.assertEqual(changed, [])
+
+    def test_filter_changed_tasks_missing_dates_raises_when_strict(self):
+        tasks_response = {"Response": {"Data": {"Items": [{"TaskId": "task_no_date", "TaskName": "no_date"}]}}}
+        with patch.dict(os.environ, {"WEDATA_TASK_CHANGE_DATE_FIELDS": "update", "WEDATA_TASK_CHANGE_STRICT": "1"}, clear=False):
+            with self.assertRaisesRegex(RuntimeError, "ListTasks response has no recognized task change time fields"):
+                _filter_changed_tasks(tasks_response, "2026-07-14", "2026-07-14")
+
+    def test_enrich_changed_task_definitions_adds_lineage_outputs_without_dropping_catalog(self):
+        client = FakeChangedTaskClient()
+        primary = {
+            "Response": {
+                "Data": {
+                    "Items": [
+                        {"TaskId": "task_changed", "TaskName": "changed_task", "UpdateTime": "2026-07-14 10:00:00"},
+                        {"TaskId": "task_old", "TaskName": "old_task", "UpdateTime": "2026-07-10 10:00:00"},
+                    ]
+                }
+            }
+        }
+        changed = [primary["Response"]["Data"]["Items"][0]]
+
+        enriched = _enrich_changed_task_definitions(client, "project", changed, 100)
+        merged = _merge_task_responses(primary, enriched)
+        by_id = {item["TaskId"]: item for item in merged["Response"]["Data"]["Items"]}
+
+        self.assertIn("task_old", by_id)
+        self.assertEqual(by_id["task_changed"]["OutputTables"], ["ads_changed_output"])
+        self.assertEqual(by_id["task_changed"]["InputTables"], ["ods_source"])
+        self.assertTrue(any(action == "ListProcessLineage" for action, payload in client.calls))
+
+    def test_sync_changed_task_codes_obeys_limit_and_returns_failures(self):
+        client = FakeChangedTaskClient()
+        changed = [
+            {"TaskId": "task_1", "TaskName": "one"},
+            {"TaskId": "task_2", "TaskName": "two"},
+        ]
+        with patch.dict(os.environ, {"WEDATA_CHANGED_TASK_CODE_LIMIT": "1", "WEDATA_SYNC_CHANGED_TASK_CODES": "1"}, clear=False):
+            codes, failures = _sync_changed_task_codes(client, "project", changed)
+
+        self.assertEqual(sorted(codes), ["task_1"])
+        self.assertEqual(failures, [])
+        self.assertEqual([action for action, payload in client.calls].count("GetTaskCode"), 1)
+
+    def test_sync_changed_task_relations_fetches_upstream_and_downstream(self):
+        client = FakeChangedTaskClient()
+        relations, failures = _sync_changed_task_relations(client, "project", [{"TaskId": "task_1", "TaskName": "one"}], 100)
+
+        self.assertEqual(failures, [])
+        self.assertIn("task_1", relations["upstream"])
+        self.assertIn("task_1", relations["downstream"])
+        self.assertIn("ListUpstreamTasks", [action for action, payload in client.calls])
+        self.assertIn("ListDownstreamTasks", [action for action, payload in client.calls])
 
     def test_metadata_sync_prints_progress(self):
         output = StringIO()
