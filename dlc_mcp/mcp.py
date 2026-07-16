@@ -364,6 +364,17 @@ def _call_tool(store, request, live=None):
                 data = store.get_table_profile(args["table_name"])
     elif name == "get_table_partition_profile":
         data = store.get_table_partition_profile(args["table_name"], args.get("partition_date", ""))
+        if live:
+            refreshed = _maybe_live_refresh(
+                meta,
+                args,
+                data,
+                lambda item: _has_error(item) or (item.get("is_partitioned") and not item.get("partition_fact_available")),
+                lambda: live.sync_table_partitions(args["table_name"]),
+                reason="" if args.get("live") else "missing_partition_facts" if data.get("is_partitioned") and not data.get("partition_fact_available") else "",
+            )
+            if refreshed:
+                data = store.get_table_partition_profile(args["table_name"], args.get("partition_date", ""))
     elif name == "get_table_readiness":
         data = store.get_table_readiness(args["table_name"])
         if live and _live_fallback(args, data, lambda item: _has_error(item) or item.get("score", 0) < 80):

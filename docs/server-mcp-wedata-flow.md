@@ -298,7 +298,7 @@ WEDATA_PARTITION_SYNC_MODE=full \
 python3 -m dlc_mcp.sync_wedata
 ```
 
-For scheduled incremental sync, omit `WEDATA_PARTITION_DATE` to update yesterday by default:
+For scheduled incremental sync, keep `WEDATA_PARTITION_SERVICE=dlc` and run the same table-based refresh. For `WEDATA_PARTITION_SERVICE=dlc`, `DescribeTablePartitions` returns the table's partition list. DLC daily sync stores all returned partitions for each candidate partitioned table and relies on `table_partitions` upsert keys to deduplicate repeated daily refreshes. Do not interpret `WEDATA_PARTITION_DATE` as a DLC-side result filter.
 
 ```bash
 cd /opt/dlc-mcp/DLC-MCP
@@ -313,15 +313,9 @@ WEDATA_PARTITION_SYNC_MODE=incremental \
 python3 -m dlc_mcp.sync_wedata
 ```
 
-To backfill one explicit date:
+`partition_date` in `get_table_partition_profile(table_name, partition_date)` is the target partition to highlight in the profile. It does not mean the cache only contains that date. This is required for delayed tables such as cloud cost tables, where a run on 2026-07-16 may update `dt=20260706` rather than `dt=20260715`.
 
-```bash
-WEDATA_SYNC_PARTITIONS=1 \
-WEDATA_PARTITION_SERVICE=dlc \
-WEDATA_PARTITION_SYNC_MODE=incremental \
-WEDATA_PARTITION_DATE=2026-07-15 \
-python3 -m dlc_mcp.sync_wedata
-```
+When a table is identified as partitioned but the cache has no partition facts, call `get_table_partition_profile(..., live=true)` to refresh the single table from DLC and write the returned partition facts back to cache.
 
 ## 11. Routine Refresh
 
@@ -346,7 +340,7 @@ The installer writes one idempotent crontab entry. It runs daily at 08:00 and ca
 0 8 * * * cd /opt/dlc-mcp/DLC-MCP && bash deploy/sync-wedata-incremental.sh /etc/dlc-mcp/env >> /data/dlc-mcp/logs/sync.log 2>&1 # dlc-mcp-wedata-sync
 ```
 
-Daily sync updates the bottom-layer facts used by MCP tools: task catalog and task-table mappings, table catalog, full metadata for tables whose catalog create/update date is yesterday, yesterday's task instances, data sources and related tasks, and yesterday's partition facts.
+Daily sync updates the bottom-layer facts used by MCP tools: task catalog and task-table mappings, table catalog, full metadata for tables whose catalog create/update date is yesterday, yesterday's task instances, data sources and related tasks, and refreshed DLC partition facts for candidate partitioned tables.
 
 Verify the schedule and logs:
 
