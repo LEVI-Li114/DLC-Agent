@@ -438,7 +438,42 @@ class McpTest(unittest.TestCase):
         self.assertIn("m2c_ods_cloud_cost_aliyun_day_di", text)
         self.assertIn("ListTasks", [action for action, payload in client.calls])
 
-    def test_calls_task_relation_and_get_table_tools_from_cache(self):
+    def test_cleanup_task_name_pseudo_tables_tool_dry_runs_and_applies(self):
+        self.store.upsert_data_source({"id": "57738", "name": "crm_fxiaoke_tx"})
+        self.store.upsert_table({"name": "m2c_ods_cloud_cost_aliyun_day_di", "data_source_id": "57738"})
+        self.store.upsert_table({"name": "ods_cloud_cost_aliyun_day_di", "guid": "guid_001", "database": "byai_bigdata"})
+        self.store.upsert_task({"id": "sync_aliyun", "name": "m2c_ods_cloud_cost_aliyun_day_di", "outputs": ["ods_cloud_cost_aliyun_day_di"]})
+
+        dry_run = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "cleanup_task_name_pseudo_tables",
+                    "arguments": {"data_source_id": "57738"},
+                },
+            },
+        )
+        applied = handle_request(
+            self.store,
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "cleanup_task_name_pseudo_tables",
+                    "arguments": {"data_source_id": "57738", "apply": True},
+                },
+            },
+        )
+
+        self.assertIn('"candidate_tables": 1', dry_run["result"]["content"][0]["text"])
+        self.assertIn('"deleted_tables": 1', applied["result"]["content"][0]["text"])
+        self.assertEqual(self.store.get_table_profile("m2c_ods_cloud_cost_aliyun_day_di")["error"], "table_not_found")
+        self.assertNotIn("error", self.store.get_table_profile("ods_cloud_cost_aliyun_day_di"))
+
         self.store.replace_task_relations("project", "task_001", "downstream", [{"related_task_id": "task_002", "related_task_name": "build_ads_customer"}])
         self.store.replace_task_relations("project", "task_001", "upstream", [{"related_task_id": "task_000", "related_task_name": "build_ods_customer"}])
         self.store.upsert_table({"name": "dim_customer", "guid": "guid_dim_customer", "project_id": "project", "database": "dw", "owner": "data-customer", "table_type": "MANAGED_TABLE"})

@@ -3,12 +3,13 @@ import json
 import os
 import sqlite3
 
-from .server import _load_env_file
 
 
 def main():
     args = _parse_args()
     if args.env_file and os.path.exists(args.env_file):
+        from .server import _load_env_file
+
         _load_env_file(args.env_file)
     db_path = args.db or os.environ.get("DLC_MCP_DB", "data/assets.db")
     conn = sqlite3.connect(db_path)
@@ -30,7 +31,37 @@ def cleanup_derived_tables(conn, apply=False):
             """
         )
     ]
-    counts = {"candidate_tables": len(names), "apply": bool(apply)}
+    return _delete_table_assets(conn, names, apply, "candidate_tables")
+
+
+def cleanup_task_name_pseudo_tables(conn, data_source_id="", apply=False):
+    filter_sql = "and t.data_source_id = ?" if data_source_id else ""
+    params = (data_source_id,) if data_source_id else ()
+    names = [
+        row["name"]
+        for row in conn.execute(
+            f"""
+            select t.name
+            from tables t
+            where coalesce(t.source_guid, '') = ''
+              and coalesce(t.database_name, '') = ''
+              {filter_sql}
+              and not exists (select 1 from columns c where c.table_name = t.name)
+              and not exists (select 1 from task_tables tt where tt.table_name = t.name)
+              and exists (select 1 from tasks task where task.name = t.name)
+            order by t.name
+            """,
+            params,
+        )
+    ]
+    result = _delete_table_assets(conn, names, apply, "candidate_tables")
+    result["data_source_id"] = data_source_id
+    result["candidate_names"] = names[:100]
+    return result
+
+
+def _delete_table_assets(conn, names, apply, candidate_key):
+    counts = {candidate_key: len(names), "apply": bool(apply)}
     if not names or not apply:
         return counts
 

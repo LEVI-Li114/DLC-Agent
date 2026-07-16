@@ -1,6 +1,8 @@
 import json
 import os
 
+from .cleanup_derived_tables import cleanup_task_name_pseudo_tables
+
 
 TOOLS = {
     "search_assets": {
@@ -228,6 +230,17 @@ TOOLS = {
     "is_core_table": {
         "description": "Decide whether a table is core and return explainable scoring reasons.",
         "schema": {"type": "object", "properties": {"table_name": {"type": "string"}}, "required": ["table_name"]},
+    },
+    "cleanup_task_name_pseudo_tables": {
+        "description": "Delete task-name pseudo-table rows from the asset fact database after a dry run, using strict safeguards.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "data_source_id": {"type": "string"},
+                "apply": {"type": "boolean"},
+            },
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": True},
     },
 }
 
@@ -558,6 +571,8 @@ def _call_tool(store, request, live=None):
         )
     elif name == "get_asset_governance_daily_report":
         data = store.get_asset_governance_daily_report(args.get("instance_date", ""), args.get("layer", ""), args.get("core_level", ""))
+    elif name == "cleanup_task_name_pseudo_tables":
+        data = cleanup_task_name_pseudo_tables(store.conn, args.get("data_source_id", ""), bool(args.get("apply", False)))
     else:
         data = store.is_core_table(args["table_name"])
 
