@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from dlc_mcp.assets import AssetStore
 from dlc_mcp.live import LiveWeData
-from dlc_mcp.mcp import handle_request
+from dlc_mcp.mcp import _call_tool, handle_request
 
 
 class FakeWeDataClient:
@@ -154,6 +154,39 @@ def test_live_sync_table_partitions_imports_dlc_partition_facts():
     assert profile["partition_fact_available"] is True
     assert profile["partition_count"] == 1
     assert profile["latest_partition"]["partition_name"] == "dt=20260706"
+
+
+class FakePartitionLive:
+    def __init__(self):
+        self.synced = []
+
+    def sync_table_partitions(self, table_name):
+        self.synced.append(table_name)
+
+
+def test_partition_profile_live_true_triggers_partition_refresh():
+    conn = sqlite3.connect(":memory:")
+    store = AssetStore(conn)
+    store.init_schema()
+    store.upsert_table({"name": "ods_cloud_cost_baidu_day_di", "database": "byai_bigdata"})
+    store.upsert_column("ods_cloud_cost_baidu_day_di", "dt", "string", "", 1)
+    live = FakePartitionLive()
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_table_partition_profile",
+            "arguments": {"table_name": "ods_cloud_cost_baidu_day_di", "partition_date": "", "live": True},
+        },
+    }
+
+    response = _call_tool(store, request, live)
+    text = response["result"]["content"][0]["text"]
+
+    assert live.synced == ["ods_cloud_cost_baidu_day_di"]
+    assert "实时刷新：是" in text
+    assert "触发原因：user_requested" in text
 
 
 class McpTest(unittest.TestCase):
