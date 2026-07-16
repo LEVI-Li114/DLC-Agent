@@ -109,6 +109,7 @@ Update this list whenever a new MCP tool is added.
 | `get_asset_governance_issue_inventory(layer, core_level, issue_type, limit)` | Return deterministic governance issues with evidence, suspected root cause, severity, and recommended next check. |
 | `get_asset_governance_daily_report(instance_date, layer, core_level)` | Return a daily governance patrol report. |
 | `is_core_table(table_name)` | Explain whether a table is core and why. |
+| `cleanup_task_name_pseudo_tables(dry_run, limit)` | Clean up pseudo table assets derived from task names. |
 
 The project, member, task-relation, and table-detail tools use the same query-mode cache-first model as the existing asset tools. By default they read SQLite first and live-refresh only when the cached fact is missing or incomplete. Set `live=true` to force-refresh the requested fact from WeData. `GetTable` requires a real table GUID for live refresh; the service does not infer a table name from a task name.
 
