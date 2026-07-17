@@ -269,6 +269,61 @@ class AssetStore:
                 collected_at text not null default '',
                 primary key (table_name, partition_name)
             );
+            create table if not exists patrol_runs (
+                run_id text primary key,
+                instance_date text not null default '',
+                scope text not null default '',
+                status text not null default 'running',
+                started_at text not null default (datetime('now')),
+                finished_at text not null default '',
+                asset_count integer not null default 0,
+                checked_count integer not null default 0,
+                error_count integer not null default 0,
+                config_json text not null default '{}',
+                summary_json text not null default '{}'
+            );
+            create table if not exists patrol_asset_snapshots (
+                run_id text not null,
+                asset_name text not null,
+                asset_type text not null default 'table',
+                layer text not null default '',
+                owner text not null default '',
+                core_level text not null default '',
+                status text not null default 'unknown',
+                snapshot_json text not null default '{}',
+                checked_at text not null default (datetime('now')),
+                primary key (run_id, asset_type, asset_name)
+            );
+            create table if not exists patrol_findings (
+                id integer primary key autoincrement,
+                run_id text not null,
+                asset_name text not null,
+                issue_type text not null,
+                severity text not null default '',
+                evidence_json text not null default '{}',
+                owner_bucket text not null default '',
+                suggested_action text not null default '',
+                created_at text not null default (datetime('now'))
+            );
+            create table if not exists patrol_metrics (
+                id integer primary key autoincrement,
+                run_id text not null,
+                metric_name text not null,
+                metric_value real not null default 0,
+                dimension_json text not null default '{}',
+                created_at text not null default (datetime('now'))
+            );
+            create table if not exists patrol_errors (
+                id integer primary key autoincrement,
+                run_id text not null,
+                asset_name text not null default '',
+                module text not null default '',
+                api_action text not null default '',
+                error_code text not null default '',
+                error_message text not null default '',
+                retryable integer not null default 0,
+                created_at text not null default (datetime('now'))
+            );
             create table if not exists expert_labels (
                 asset_type text not null,
                 asset_name text not null,
@@ -287,6 +342,9 @@ class AssetStore:
         )
         self.conn.execute("create index if not exists idx_asset_edges_target on asset_edges (target_type, target_id)")
         self.conn.execute("create index if not exists idx_asset_edges_relation on asset_edges (relation_type, evidence_source, confidence)")
+        self.conn.execute("create index if not exists idx_patrol_runs_date_scope on patrol_runs (instance_date, scope, status)")
+        self.conn.execute("create index if not exists idx_patrol_findings_run on patrol_findings (run_id, severity, issue_type)")
+        self.conn.execute("create index if not exists idx_patrol_errors_run on patrol_errors (run_id, module)")
         self._add_column_if_missing("tables", "source_guid", "text not null default ''")
         self._add_column_if_missing("tables", "data_source_id", "text not null default ''")
         self._add_column_if_missing("tables", "project_id", "text not null default ''")
@@ -348,6 +406,152 @@ class AssetStore:
             (service, service, product, product),
         )
         return {"results": [dict(row) for row in rows]}
+
+    def create_patrol_run(self, run_id, instance_date, scope, config):
+        self.conn.execute(
+            """
+            insert into patrol_runs (run_id, instance_date, scope, status, config_json)
+            values (?, ?, ?, 'running', ?)
+            on conflict(run_id) do update set
+                instance_date = excluded.instance_date,
+                scope = excluded.scope,
+                status = 'running',
+                config_json = excluded.config_json,
+                summary_json = '{}',
+                finished_at = ''
+            """,
+            (run_id, instance_date, scope, json.dumps(config or {}, ensure_ascii=False)),
+        )
+        self.conn.commit()
+
+    def finish_patrol_run(self, run_id, status, summary):
+        summary = summary or {}
+        self.conn.execute(
+            """
+            update patrol_runs
+            set status = ?,
+                finished_at = datetime('now'),
+                checked_count = ?,
+                error_count = ?,
+                summary_json = ?
+            where run_id = ?
+            """,
+            (
+                status,
+                int(summary.get("checked_count") or 0),
+                int(summary.get("error_count") or 0),
+                json.dumps(summary, ensure_ascii=False),
+                run_id,
+            ),
+        )
+        self.conn.commit()
+
+    def upsert_patrol_asset_snapshot(self, item):
+        self.conn.execute(
+            """
+            insert into patrol_asset_snapshots
+                (run_id, asset_name, asset_type, layer, owner, core_level, status, snapshot_json, checked_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            on conflict(run_id, asset_type, asset_name) do update set
+                layer = excluded.layer,
+                owner = excluded.owner,
+                core_level = excluded.core_level,
+                status = excluded.status,
+                snapshot_json = excluded.snapshot_json,
+                checked_at = excluded.checked_at
+            """,
+            (
+                item["run_id"],
+                item["asset_name"],
+                item.get("asset_type", "table"),
+                item.get("layer", ""),
+                item.get("owner", ""),
+                item.get("core_level", ""),
+                item.get("status", "unknown"),
+                json.dumps(item.get("snapshot") or {}, ensure_ascii=False),
+            ),
+        )
+        self.conn.commit()
+
+    def insert_patrol_finding(self, item):
+        self.conn.execute(
+            """
+            insert into patrol_findings
+                (run_id, asset_name, issue_type, severity, evidence_json, owner_bucket, suggested_action)
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item["run_id"],
+                item["asset_name"],
+                item["issue_type"],
+                item.get("severity", ""),
+                json.dumps(item.get("evidence") or {}, ensure_ascii=False),
+                item.get("owner_bucket", ""),
+                item.get("suggested_action", ""),
+            ),
+        )
+        self.conn.commit()
+
+    def insert_patrol_metric(self, item):
+        self.conn.execute(
+            """
+            insert into patrol_metrics (run_id, metric_name, metric_value, dimension_json)
+            values (?, ?, ?, ?)
+            """,
+            (
+                item["run_id"],
+                item["metric_name"],
+                float(item.get("metric_value") or 0),
+                json.dumps(item.get("dimension") or {}, ensure_ascii=False),
+            ),
+        )
+        self.conn.commit()
+
+    def insert_patrol_error(self, item):
+        self.conn.execute(
+            """
+            insert into patrol_errors
+                (run_id, asset_name, module, api_action, error_code, error_message, retryable)
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item["run_id"],
+                item.get("asset_name", ""),
+                item.get("module", ""),
+                item.get("api_action", ""),
+                item.get("error_code", ""),
+                item.get("error_message", ""),
+                1 if item.get("retryable") else 0,
+            ),
+        )
+        self.conn.commit()
+
+    def latest_patrol_run(self, instance_date="", scope=""):
+        where = ["status in ('completed', 'partial')"]
+        params = []
+        if instance_date:
+            where.append("instance_date = ?")
+            params.append(instance_date)
+        if scope:
+            where.append("scope = ?")
+            params.append(scope)
+        row = self._one(
+            "select * from patrol_runs where " + " and ".join(where) + " order by finished_at desc, started_at desc limit 1",
+            tuple(params),
+        )
+        return dict(row) if row else None
+
+    def get_patrol_report_data(self, run_id):
+        run = self._one("select * from patrol_runs where run_id = ?", (run_id,))
+        if not run:
+            return {"error": "patrol_run_not_found", "run_id": run_id}
+        return {
+            "run": dict(run),
+            "snapshots": [dict(row) for row in self._all("select * from patrol_asset_snapshots where run_id = ? order by asset_name", (run_id,))],
+            "findings": [dict(row) for row in self._all("select * from patrol_findings where run_id = ? order by severity, issue_type, asset_name", (run_id,))],
+            "metrics": [dict(row) for row in self._all("select * from patrol_metrics where run_id = ? order by metric_name", (run_id,))],
+            "errors": [dict(row) for row in self._all("select * from patrol_errors where run_id = ? order by module, asset_name", (run_id,))],
+        }
 
     def upsert_project(self, item):
         self.conn.execute(

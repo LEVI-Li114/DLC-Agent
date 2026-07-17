@@ -1,0 +1,64 @@
+import sqlite3
+
+from dlc_mcp.assets import AssetStore
+
+
+def test_patrol_run_lifecycle_and_report_data():
+    store = AssetStore(sqlite3.connect(":memory:"))
+    store.init_schema()
+
+    store.create_patrol_run("run-1", "2026-07-16", "daily_p0", {"limit": 10})
+    store.upsert_patrol_asset_snapshot(
+        {
+            "run_id": "run-1",
+            "asset_name": "ods_cloud_cost_baidu_day_di",
+            "asset_type": "table",
+            "layer": "ods",
+            "owner": "prod-bigdata",
+            "core_level": "非核心",
+            "status": "risk",
+            "snapshot": {"latest_partition": "dt=20260715"},
+        }
+    )
+    store.insert_patrol_finding(
+        {
+            "run_id": "run-1",
+            "asset_name": "ods_cloud_cost_baidu_day_di",
+            "issue_type": "missing_quality_rules",
+            "severity": "P1",
+            "evidence": {"quality_rule_count": 0},
+            "owner_bucket": "warehouse_owner",
+            "suggested_action": "Add or confirm quality monitoring rule coverage.",
+        }
+    )
+    store.insert_patrol_metric(
+        {
+            "run_id": "run-1",
+            "metric_name": "checked_count",
+            "metric_value": 1,
+            "dimension": {"scope": "daily_p0"},
+        }
+    )
+    store.insert_patrol_error(
+        {
+            "run_id": "run-1",
+            "asset_name": "ods_cloud_cost_baidu_day_di",
+            "module": "lineage",
+            "api_action": "ListLineage",
+            "error_code": "InternalError",
+            "error_message": "temporary unavailable",
+            "retryable": True,
+        }
+    )
+    store.finish_patrol_run("run-1", "partial", {"checked_count": 1, "error_count": 1})
+
+    latest = store.latest_patrol_run("2026-07-16", "daily_p0")
+    report = store.get_patrol_report_data("run-1")
+
+    assert latest["run_id"] == "run-1"
+    assert latest["status"] == "partial"
+    assert report["run"]["run_id"] == "run-1"
+    assert report["snapshots"][0]["asset_name"] == "ods_cloud_cost_baidu_day_di"
+    assert report["findings"][0]["issue_type"] == "missing_quality_rules"
+    assert report["metrics"][0]["metric_name"] == "checked_count"
+    assert report["errors"][0]["module"] == "lineage"
