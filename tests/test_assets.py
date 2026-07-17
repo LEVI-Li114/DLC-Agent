@@ -418,6 +418,22 @@ class AssetStoreTest(unittest.TestCase):
         self.assertIn("data-finance", owner["owner_candidates"])
         self.assertTrue(owner["suggestions"])
 
+    def test_owner_resolution_maps_task_and_table_owner_candidates(self):
+        store = make_store()
+        store.upsert_table({"name": "ads_system_owned", "layer": "ads", "owner": "tencent", "data_source_id": "ds_001"})
+        store.upsert_task({"id": "task_owner", "name": "ads_system_owned", "owner": "100043939904", "outputs": ["ads_system_owned"]})
+
+        task = store.get_task("task_owner")
+        owner = store.get_asset_owner_profile("ads_system_owned")
+        profile = store.get_table_profile("ads_system_owned")
+
+        self.assertEqual(task["owner_name"], "luyuan")
+        self.assertEqual(task["owner_identity"]["resolved_owner"], "luyuan")
+        self.assertEqual(owner["resolved_owner"], "luyuan")
+        self.assertEqual(owner["owner_source"], "producer_task_owner")
+        self.assertEqual(owner["owner_confidence"], "high")
+        self.assertEqual(profile["owner_resolution"]["resolved_owner"], "luyuan")
+
     def test_asset_usage_profile_uses_metadata_proxy_signals(self):
         usage = make_store().get_asset_usage_profile("ads_customer_revenue_daily")
 

@@ -1893,7 +1893,7 @@ class AssetStore:
         task = self._one("select * from tasks where id = ?", (task_id,))
         if not task:
             return {"error": "task_not_found", "task_id": task_id}
-        data = dict(task)
+        data = self._task_dict(task)
         data["inputs"] = [row["table_name"] for row in self._all("select table_name from task_tables where task_id = ? and direction = 'input' order by table_name", (task_id,))]
         data["outputs"] = [row["table_name"] for row in self._all("select table_name from task_tables where task_id = ? and direction = 'output' order by table_name", (task_id,))]
         return data
@@ -1936,7 +1936,7 @@ class AssetStore:
             """,
             (table_name,),
         )
-        return {"table_name": table_name, "tasks": [dict(row) for row in rows]}
+        return {"table_name": table_name, "tasks": [self._task_dict(row) for row in rows]}
 
     def search_tasks(self, query):
         like = f"%{query}%"
@@ -1971,6 +1971,7 @@ class AssetStore:
                 "rules": [dict(row) for row in rules],
             },
             "tasks": self.get_table_tasks(table_name)["tasks"],
+            "owner_resolution": self.resolve_table_owner(table_name, table_data, data_source, self.get_table_tasks(table_name)["tasks"], self._label_or_none("table", table_name)),
             "core": self.is_core_table(table_name),
             "latest_runs": self._latest_output_task_runs(table_name),
             "gaps": self._table_profile_gaps(table_name, table_data, rules),
@@ -2126,10 +2127,16 @@ class AssetStore:
             "downstream_owners": downstream_owners,
         }
         owner_candidates = _dedupe([owners["expert_owner"], owners["table_owner"], *producer_task_owners, owners["data_source_owner"]])
+        resolved = self.resolve_table_owner(table_name, table, data_source, tasks, expert)
+        if resolved.get("resolved_owner"):
+            owner_candidates = _dedupe([resolved["resolved_owner"], *owner_candidates])
         gaps = _owner_profile_gaps(owners)
+        if resolved.get("owner_gap_reason") and resolved.get("owner_gap_reason") not in gaps:
+            gaps.append(resolved["owner_gap_reason"])
         return {
             "table_name": table_name,
             **owners,
+            **resolved,
             "owner_candidates": owner_candidates,
             "gaps": gaps,
             "suggestions": _owner_profile_suggestions(gaps, owner_candidates),
@@ -2565,6 +2572,51 @@ class AssetStore:
         data = dict(row)
         data["raw"] = _json_dict(data.pop("raw_json", "{}"))
         return data
+
+    def _task_dict(self, row):
+        data = dict(row)
+        data["owner_identity"] = resolve_owner_identity(data.get("owner", ""))
+        data["owner_name"] = data["owner_identity"].get("resolved_owner", "")
+        return data
+
+    def resolve_table_owner(self, table_name, table=None, data_source=None, tasks=None, expert=None):
+        table = table or (self.get_table_detail(table_name=table_name).get("table") or {})
+        data_source = data_source if data_source is not None else None
+        tasks = tasks if tasks is not None else self.get_table_tasks(table_name).get("tasks", [])
+        expert = expert or self._label_or_none("table", table_name) or {}
+        candidates = [
+            ("expert_owner", expert.get("owner") or expert.get("reviewer", ""), "high"),
+        ]
+        for task in tasks or []:
+            if task.get("direction") == "output":
+                candidates.append(("producer_task_owner", task.get("owner", ""), "high"))
+        for task in tasks or []:
+            candidates.append(("related_task_owner", task.get("owner", ""), "medium"))
+        candidates.extend(
+            [
+                ("table_owner", table.get("owner", ""), "medium"),
+                ("data_source_owner", (data_source or {}).get("owner", ""), "low"),
+            ]
+        )
+        for source, value, confidence in candidates:
+            identity = resolve_owner_identity(value)
+            if identity.get("resolved_owner"):
+                return {
+                    "raw_table_owner": table.get("owner", ""),
+                    "owner_identity": identity.get("owner_identity", ""),
+                    "resolved_owner": identity.get("resolved_owner", ""),
+                    "owner_source": source,
+                    "owner_confidence": confidence,
+                    "owner_gap_reason": "",
+                }
+        return {
+            "raw_table_owner": table.get("owner", ""),
+            "owner_identity": "",
+            "resolved_owner": "",
+            "owner_source": "",
+            "owner_confidence": "none",
+            "owner_gap_reason": "table owner is system account and no task/data source owner was resolved",
+        }
 
     def _data_source_dict(self, row):
         data = dict(row)
@@ -4017,13 +4069,33 @@ def _core_level_from_value_tier(value_tier):
     return "非核心"
 
 
-def _owner_name(owner_id):
+SYSTEM_OWNER_VALUES = {"", "tencent", "root", "system", "unknown", "none", "null"}
+
+
+def resolve_owner_identity(owner_id):
+    raw = str(owner_id or "").strip()
     aliases = {"100043939904": "luyuan"}
     for item in os.environ.get("DLC_MCP_USER_ALIASES", "").split(","):
         if ":" in item:
             key, value = item.split(":", 1)
             aliases[key.strip()] = value.strip()
-    return aliases.get(str(owner_id), str(owner_id))
+    if not raw or raw.lower() in SYSTEM_OWNER_VALUES:
+        return {
+            "owner_identity": raw,
+            "resolved_owner": "",
+            "owner_confidence": "none",
+            "owner_gap_reason": "system_or_empty_owner" if raw else "missing_owner",
+        }
+    return {
+        "owner_identity": raw,
+        "resolved_owner": aliases.get(raw, raw),
+        "owner_confidence": "high" if raw in aliases else "medium",
+        "owner_gap_reason": "" if raw in aliases else "alias_not_found",
+    }
+
+
+def _owner_name(owner_id):
+    return resolve_owner_identity(owner_id).get("resolved_owner") or str(owner_id or "")
 
 
 def _parsed_output_tables_for_task(conn, task_id):

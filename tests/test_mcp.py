@@ -427,6 +427,29 @@ def test_daily_report_markdown_renders_enriched_patrol_snapshot():
     assert "live_only" in text
 
 
+
+def test_task_and_table_profile_render_resolved_owner():
+    store = AssetStore(sqlite3.connect(":memory:"))
+    store.init_schema()
+    store.upsert_table({"name": "ads_system_owned", "layer": "ads", "owner": "tencent", "data_source_id": "ds_001"})
+    store.upsert_column("ads_system_owned", "dt", "string", "", 1)
+    store.upsert_data_source({"id": "ds_001", "name": "DLC", "owner": "100043939904", "config": {}})
+    store.upsert_task({"id": "task_owner", "name": "ads_system_owned", "owner": "100043939904", "outputs": ["ads_system_owned"]})
+
+    task_text = _call_tool(
+        store,
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "search_tasks", "arguments": {"query": "ads_system_owned"}}},
+    )["result"]["content"][0]["text"]
+    profile_text = _call_tool(
+        store,
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "get_table_profile", "arguments": {"table_name": "ads_system_owned"}}},
+    )["result"]["content"][0]["text"]
+
+    assert "100043939904 / luyuan" in task_text
+    assert "解析负责人：`luyuan`" in profile_text
+    assert "producer_task_owner" in profile_text
+
+
 def test_task_runs_live_failure_returns_unknown_not_empty_runs():
     conn = sqlite3.connect(":memory:")
     store = AssetStore(conn)
