@@ -237,6 +237,7 @@ class PatrolService:
                     "status": "missing" if detail.get("error") else "complete",
                     "table": table_detail,
                     "core_level": (profile.get("core") or {}).get("core_level", "") if not profile.get("error") else "",
+                    "owner_resolution": profile.get("owner_resolution", {}) if not profile.get("error") else {},
                 },
                 "columns": {"status": "missing" if not columns else "complete", "count": len(columns)},
                 "lineage": {

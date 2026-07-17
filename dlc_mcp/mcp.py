@@ -869,7 +869,7 @@ def _format_markdown(tool_name, data):
         rows = data.get("results", [])
         return _section("任务搜索结果", [f"查询：`{_cell(data.get('query'))}`", f"数量：{len(rows)}"]) + "\n\n" + _table(
             ["TaskId", "任务名", "类型", "负责人", "状态", "产出表"],
-            [[r.get("id"), r.get("name"), r.get("task_type"), r.get("owner"), r.get("status"), ", ".join(r.get("outputs") or [])] for r in rows],
+            [[r.get("id"), r.get("name"), r.get("task_type"), _owner_display(r), r.get("status"), ", ".join(r.get("outputs") or [])] for r in rows],
         )
     if tool_name == "get_task_code":
         code_text = data.get("code_text", "")
@@ -1520,6 +1520,14 @@ def _format_metric_definition(data):
     )
 
 
+
+def _owner_display(item):
+    owner = item.get("owner", "")
+    owner_name = item.get("owner_name", "") or (item.get("owner_identity") or {}).get("resolved_owner", "")
+    if owner and owner_name and owner_name != owner:
+        return f"{owner} / {owner_name}"
+    return owner_name or owner
+
 def _format_table_profile(data):
     table = data.get("table", {})
     core = data.get("core", {})
@@ -1535,6 +1543,8 @@ def _format_table_profile(data):
                     f"层级：`{_cell(table.get('layer'))}`",
                     f"领域：`{_cell(table.get('domain'))}`",
                     f"负责人：`{_cell(table.get('owner'))}`",
+                    f"解析负责人：`{_cell((data.get('owner_resolution') or {}).get('resolved_owner'))}`",
+                    f"负责人来源：`{_cell((data.get('owner_resolution') or {}).get('owner_source'))}`",
                     f"描述：{_cell(table.get('description'))}",
                     f"数据源ID：`{_cell(table.get('data_source_id'))}`",
                 ],
@@ -1561,7 +1571,7 @@ def _format_table_profile(data):
             + _table(["表名", "经由"], [[r.get("downstream"), r.get("via")] for r in lineage.get("downstream", [])]),
             _section("相关任务", [f"任务数：{len(data.get('tasks', []))}"]) + "\n\n" + _table(
                 ["TaskId", "任务名", "方向", "状态", "负责人", "调度周期", "调度时间", "调度说明"],
-                [[t.get("id"), t.get("name"), t.get("direction"), t.get("status"), t.get("owner"), t.get("cycle"), t.get("schedule_time"), t.get("schedule_desc")] for t in data.get("tasks", [])],
+                [[t.get("id"), t.get("name"), t.get("direction"), t.get("status"), _owner_display(t), t.get("cycle"), t.get("schedule_time"), t.get("schedule_desc")] for t in data.get("tasks", [])],
             ),
             _format_profile_data_source(source),
             _section("质量监控", [f"是否有监控：{bool(quality.get('rule_count'))}", f"规则数：{quality.get('rule_count')}", f"最新状态：`{_cell(quality.get('latest_status'))}`"])

@@ -396,3 +396,26 @@ def test_patrol_summary_counts_live_and_severity_buckets():
     assert result["p0_count"] == 0
     assert result["p1_count"] == 1
     assert result["p2_count"] == 0
+
+
+def test_patrol_snapshot_includes_resolved_owner_from_producer_task():
+    store = AssetStore(sqlite3.connect(":memory:"))
+    store.init_schema()
+    store.upsert_table({"name": "ads_system_owned", "layer": "ads", "owner": "tencent", "database": "dw"})
+    store.upsert_column("ads_system_owned", "dt", "string", "", 1)
+    store.upsert_task({"id": "task_owner", "name": "ads_system_owned", "owner": "100043939904", "outputs": ["ads_system_owned"]})
+
+    result = PatrolService(store, PatrolEvidenceLive()).run(
+        "manual",
+        "2026-07-16",
+        table="ads_system_owned",
+        limit=1,
+        concurrency=1,
+        retry=0,
+        api_delay_seconds=0,
+    )
+    report = store.get_patrol_report_data(result["run_id"])
+    snapshot = report["snapshots"][0]["snapshot_json"]
+
+    assert "luyuan" in snapshot
+    assert "producer_task_owner" in snapshot
