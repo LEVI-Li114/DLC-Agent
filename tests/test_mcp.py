@@ -533,7 +533,7 @@ class McpTest(unittest.TestCase):
         text = response["result"]["content"][0]["text"]
 
         self.assertIn("查询元信息", text)
-        self.assertIn("数据来源：cache", text)
+        self.assertIn("数据来源：live", text)
         self.assertIn("实时刷新：否", text)
 
     def test_get_task_code_live_success_includes_refresh_metadata(self):
@@ -584,19 +584,23 @@ class McpTest(unittest.TestCase):
         )
 
         text = response["result"]["content"][0]["text"]
-        self.assertIn("数据来源：cache_snapshot", text)
+        self.assertIn("数据来源：patrol_snapshot", text)
         self.assertIn("实时刷新：否", text)
+        self.assertIn("patrol_snapshot_not_found", text)
 
     def test_daily_report_markdown_renders_execution_sections(self):
+        self.store.create_patrol_run("run-sections", "", "daily_p0", {})
+        self.store.insert_patrol_metric({"run_id": "run-sections", "metric_name": "checked_count", "metric_value": 1, "dimension": {}})
+        self.store.finish_patrol_run("run-sections", "completed", {"checked_count": 1, "error_count": 0})
         response = handle_request(
             self.store,
             {"jsonrpc": "2.0", "id": 145, "method": "tools/call", "params": {"name": "get_asset_governance_daily_report", "arguments": {}}},
         )
         text = response["result"]["content"][0]["text"]
 
-        self.assertIn("治理执行摘要", text)
-        self.assertIn("按责任方拆解", text)
-        self.assertIn("验收标准", text)
+        self.assertIn("每日巡检报告", text)
+        self.assertIn("巡检指标", text)
+        self.assertIn("本次巡检未完成检查", text)
 
     def test_get_task_code_validates_missing_identity(self):
         response = handle_request(
@@ -894,7 +898,7 @@ class McpTest(unittest.TestCase):
                 "jsonrpc": "2.0",
                 "id": 26,
                 "method": "tools/call",
-                "params": {"name": "get_table_partition_profile", "arguments": {"table_name": "ads_customer_revenue_daily", "partition_date": "2026-07-07"}},
+                "params": {"name": "get_table_partition_profile", "arguments": {"table_name": "ads_customer_revenue_daily", "partition_date": "2026-07-07", "source": "legacy_cache"}},
             },
         )
 
@@ -915,7 +919,7 @@ class McpTest(unittest.TestCase):
                 "jsonrpc": "2.0",
                 "id": 99,
                 "method": "tools/call",
-                "params": {"name": "get_table_partition_profile", "arguments": {"table_name": "ods_cloud_cost_baidu_day_di"}},
+                "params": {"name": "get_table_partition_profile", "arguments": {"table_name": "ods_cloud_cost_baidu_day_di", "source": "legacy_cache"}},
             },
         )
 
@@ -1050,7 +1054,7 @@ class McpTest(unittest.TestCase):
                 "jsonrpc": "2.0",
                 "id": 25,
                 "method": "tools/call",
-                "params": {"name": "get_asset_governance_daily_report", "arguments": {"instance_date": "2026-07-01", "layer": "dws"}},
+                "params": {"name": "get_asset_governance_daily_report", "arguments": {"instance_date": "2026-07-01", "layer": "dws", "source": "legacy_cache"}},
             },
         )
 
@@ -1087,7 +1091,7 @@ class McpTest(unittest.TestCase):
                 "jsonrpc": "2.0",
                 "id": 4,
                 "method": "tools/call",
-                "params": {"name": "get_task_runs", "arguments": {"task_id": "task_001"}},
+                "params": {"name": "get_task_runs", "arguments": {"task_id": "task_001", "source": "legacy_cache"}},
             },
         )
 
@@ -1102,7 +1106,7 @@ class McpTest(unittest.TestCase):
                 "method": "tools/call",
                 "params": {
                     "name": "get_task_runs",
-                    "arguments": {"task_name": "build_dim_customer", "instance_date": "2026-07-01"},
+                    "arguments": {"task_name": "build_dim_customer", "instance_date": "2026-07-01", "source": "legacy_cache"},
                 },
             },
         )
@@ -1385,7 +1389,7 @@ class McpTest(unittest.TestCase):
                 "method": "tools/call",
                 "params": {
                     "name": "get_asset_governance_issue_inventory",
-                    "arguments": {"issue_type": "missing_quality_rules", "limit": 10},
+                    "arguments": {"issue_type": "missing_quality_rules", "limit": 10, "source": "legacy_cache"},
                 },
             },
         )

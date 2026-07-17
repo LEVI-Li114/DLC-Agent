@@ -52,15 +52,43 @@ Ordinary user access and token handling are documented in [docs/user-access.md](
 
 ## Query Mode
 
-The default user-facing server runs in query mode:
+The default user-facing server now uses explicit source modes instead of treating every SQLite fact as current truth.
 
-```text
-cache first -> live fallback -> write local cache -> return result
+DLC MCP uses three primary data sources:
+
+- `registry`: SQLite index for tables, tasks, data sources, and project metadata.
+- `live`: current Tencent Cloud / DLC / WeData API results for dynamic facts such as partitions, task runs, quality, lineage, and task code.
+- `patrol_snapshot`: a specific daily patrol run used for governance reports and issue inventories.
+
+Default `source=auto` behavior:
+
+- Single-table and single-task diagnostics use `live`.
+- Search and list tools use `registry`.
+- Governance reports and issue inventories use the latest `patrol_snapshot`.
+
+Use `source=legacy_cache` only for debugging old SQLite dynamic facts. Legacy cache results do not represent current truth.
+
+Query failures are reported as `check_failed` or `partial_live`; they are not treated as confirmed missing partitions, missing task runs, missing quality rules, or missing lineage.
+
+Query mode does not mutate remote WeData/DLC business objects. It may read remote metadata/code/project facts and update the local SQLite registry or patrol snapshots. Tools are advertised with MCP `readOnlyHint` annotations so clients that support tool annotations can make safer auto-approval decisions, but confirmation prompts are still controlled by each MCP Host.
+
+## Running daily asset patrol
+
+Run a daily P0 patrol with:
+
+```bash
+python3 -m dlc_mcp.asset_patrol --scope daily_p0 --instance-date YYYY-MM-DD --limit 50
 ```
 
-For normal query tools, `dlc-mcp` reads SQLite first. If the cached fact is missing or incomplete and live WeData credentials are configured on the trusted server, it calls the corresponding read-only Tencent Cloud/WeData API, imports the response into the local SQLite cache, then reads SQLite again and returns that refreshed result. Passing `live=true` keeps its existing meaning: force a live refresh instead of fallback-only behavior.
+The patrol writes:
 
-Query mode does not mutate remote WeData/DLC business objects. It may read remote metadata/code/project facts and update the local SQLite cache. Tools are advertised with MCP `readOnlyHint` annotations so clients that support tool annotations can make safer auto-approval decisions, but confirmation prompts are still controlled by each MCP Host.
+- `patrol_runs`
+- `patrol_asset_snapshots`
+- `patrol_findings`
+- `patrol_metrics`
+- `patrol_errors`
+
+Governance report tools read a single patrol `run_id` so report evidence is time-consistent. If no patrol snapshot exists, report tools ask the user to run patrol instead of falling back to legacy dynamic cache.
 
 ## Tools
 
