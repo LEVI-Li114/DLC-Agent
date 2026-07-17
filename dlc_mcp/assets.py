@@ -97,7 +97,12 @@ TENCENT_CLOUD_API_CATALOG = [
 
 class AssetStore:
     def __init__(self, conn):
-        self.conn = conn
+        db_path = conn.execute("pragma database_list").fetchone()[2]
+        if db_path:
+            self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        else:
+            self.conn = sqlite3.connect(":memory:", check_same_thread=False)
+            conn.backup(self.conn)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("pragma busy_timeout = 30000")
 

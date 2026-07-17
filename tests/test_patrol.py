@@ -120,3 +120,29 @@ def test_patrol_service_daily_p0_writes_run_snapshot_and_metric():
     assert report["run"]["scope"] == "daily_p0"
     assert report["snapshots"][0]["asset_name"] == "ods_cloud_cost_baidu_day_di"
     assert report["metrics"][0]["metric_name"] == "checked_count"
+
+
+def test_patrol_service_summary_includes_execution_controls():
+    store = AssetStore(sqlite3.connect(":memory:"))
+    store.init_schema()
+    store.upsert_table({"name": "ods_cloud_cost_baidu_day_di", "layer": "ods", "owner": "prod-bigdata", "database": "byai_bigdata"})
+    store.upsert_column("ods_cloud_cost_baidu_day_di", "dt", "string", "", 1)
+
+    result = PatrolService(store, PatrolLive(store)).run_daily_p0(
+        "2026-07-16",
+        limit=1,
+        concurrency=2,
+        table_timeout_seconds=90,
+        retry=1,
+        retry_backoff_seconds=0,
+        api_delay_seconds=0,
+        failure_threshold=0.4,
+    )
+
+    assert result["timeout_count"] == 0
+    assert result["duration_seconds"] >= 0
+    assert result["concurrency"] == 2
+    assert result["table_timeout_seconds"] == 90
+    assert result["retry"] == 1
+    assert result["api_delay_seconds"] == 0
+    assert result["failure_threshold"] == 0.4
