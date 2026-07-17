@@ -238,6 +238,7 @@ TOOLS = {
                 "instance_date": {"type": "string"},
                 "layer": {"type": "string"},
                 "core_level": {"type": "string"},
+                "scope": {"type": "string"},
             },
         },
     },
@@ -626,7 +627,17 @@ def _call_tool(store, request, live=None):
             int(args.get("limit", 100)),
         )
     elif name == "get_asset_governance_daily_report":
-        data = store.get_asset_governance_daily_report(args.get("instance_date", ""), args.get("layer", ""), args.get("core_level", ""))
+        if source == Source.LEGACY_CACHE:
+            meta["source"] = Source.LEGACY_CACHE
+            data = store.get_asset_governance_daily_report(args.get("instance_date", ""), args.get("layer", ""), args.get("core_level", ""))
+        else:
+            meta["source"] = Source.PATROL_SNAPSHOT
+            run = store.latest_patrol_run(args.get("instance_date", ""), args.get("scope", ""))
+            if not run:
+                data = {"source": Source.PATROL_SNAPSHOT, "error": "patrol_snapshot_not_found"}
+            else:
+                data = store.get_patrol_report_data(run["run_id"])
+                data["source"] = Source.PATROL_SNAPSHOT
     elif name == "cleanup_task_name_pseudo_tables":
         data = cleanup_task_name_pseudo_tables(store.conn, args.get("data_source_id", ""), bool(args.get("apply", False)))
     else:
@@ -662,6 +673,31 @@ def _format_markdown(tool_name, data):
         return _section("部分查询失败", [f"状态：`{_cell(base.get('status', 'unknown'))}`"]) + "\n\n" + _table(
             ["模块", "状态", "API", "错误", "可重试"],
             error_rows,
+        )
+    if tool_name == "get_asset_governance_daily_report" and data.get("source") == "patrol_snapshot":
+        if data.get("error"):
+            return _section("每日巡检报告", [f"错误：`{_cell(data.get('error'))}`", "没有可用巡检快照，请先运行每日巡检。"])
+        run = data.get("run") or {}
+        metrics = data.get("metrics") or []
+        findings = data.get("findings") or []
+        errors = data.get("errors") or []
+        return "\n\n".join(
+            [
+                _section(
+                    "每日巡检报告",
+                    [
+                        f"Run ID：`{_cell(run.get('run_id'))}`",
+                        f"日期：`{_cell(run.get('instance_date'))}`",
+                        f"范围：`{_cell(run.get('scope'))}`",
+                        f"状态：`{_cell(run.get('status'))}`",
+                        f"完成检查：{_cell(run.get('checked_count'))}",
+                        f"错误数：{_cell(run.get('error_count'))}",
+                    ],
+                ),
+                _section("巡检指标", []) + "\n\n" + _table(["指标", "值", "维度"], [[m.get("metric_name"), m.get("metric_value"), m.get("dimension_json")] for m in metrics]),
+                _section("发现的问题", []) + "\n\n" + _table(["资产", "问题", "严重级别", "责任桶"], [[f.get("asset_name"), f.get("issue_type"), f.get("severity"), f.get("owner_bucket")] for f in findings]),
+                _section("本次巡检未完成检查", []) + "\n\n" + _table(["资产", "模块", "API", "错误"], [[e.get("asset_name"), e.get("module"), e.get("api_action"), e.get("error_message")] for e in errors]),
+            ]
         )
     if tool_name == "list_projects":
         rows = data.get("results", [])

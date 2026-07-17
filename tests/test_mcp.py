@@ -291,6 +291,52 @@ class FailingTaskRunLive:
         raise RuntimeError("ListTaskInstances failed: InternalError temporary unavailable")
 
 
+def test_daily_report_auto_requires_patrol_snapshot():
+    conn = sqlite3.connect(":memory:")
+    store = AssetStore(conn)
+    store.init_schema()
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_asset_governance_daily_report",
+            "arguments": {"instance_date": "2026-07-16"},
+        },
+    }
+
+    response = _call_tool(store, request)
+    text = response["result"]["content"][0]["text"]
+
+    assert "数据来源：patrol_snapshot" in text
+    assert "patrol_snapshot_not_found" in text
+
+
+def test_daily_report_auto_reads_latest_patrol_snapshot():
+    conn = sqlite3.connect(":memory:")
+    store = AssetStore(conn)
+    store.init_schema()
+    store.create_patrol_run("run-1", "2026-07-16", "daily_p0", {})
+    store.insert_patrol_metric({"run_id": "run-1", "metric_name": "checked_count", "metric_value": 1, "dimension": {}})
+    store.finish_patrol_run("run-1", "completed", {"checked_count": 1, "error_count": 0})
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_asset_governance_daily_report",
+            "arguments": {"instance_date": "2026-07-16"},
+        },
+    }
+
+    response = _call_tool(store, request)
+    text = response["result"]["content"][0]["text"]
+
+    assert "数据来源：patrol_snapshot" in text
+    assert "run-1" in text
+    assert "checked_count" in text
+
+
 def test_task_runs_live_failure_returns_unknown_not_empty_runs():
     conn = sqlite3.connect(":memory:")
     store = AssetStore(conn)
