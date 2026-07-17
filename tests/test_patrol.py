@@ -145,4 +145,59 @@ def test_patrol_service_summary_includes_execution_controls():
     assert result["table_timeout_seconds"] == 90
     assert result["retry"] == 1
     assert result["api_delay_seconds"] == 0
-    assert result["failure_threshold"] == 0.4
+
+
+class FailingPatrolLive:
+    def sync_table_partitions(self, table_name):
+        raise RuntimeError("DescribeTablePartitions failed: InternalError temporary unavailable")
+
+
+def test_patrol_service_records_table_failure_and_continues():
+    store = AssetStore(sqlite3.connect(":memory:"))
+    store.init_schema()
+    store.upsert_table({"name": "ads_ok", "layer": "ads", "owner": "data", "database": "dw"})
+    store.upsert_table({"name": "ads_fail", "layer": "ads", "owner": "data", "database": "dw"})
+
+    class MixedLive:
+        def __init__(self, store):
+            self.store = store
+        def sync_table_partitions(self, table_name):
+            if table_name == "ads_fail":
+                raise RuntimeError("DescribeTablePartitions failed: InternalError temporary unavailable")
+            self.store.upsert_table_partition({"table_name": table_name, "partition_name": "dt=20260715", "partition_date": "20260715", "row_count": 1})
+
+    result = PatrolService(store, MixedLive(store)).run_daily_p0(
+        "2026-07-16",
+        limit=2,
+        concurrency=2,
+        retry=0,
+        api_delay_seconds=0,
+        failure_threshold=0.75,
+    )
+    report = store.get_patrol_report_data(result["run_id"])
+
+    assert result["status"] == "partial"
+    assert result["checked_count"] == 2
+    assert result["error_count"] == 1
+    assert len(report["snapshots"]) == 2
+    assert report["errors"][0]["asset_name"] == "ads_fail"
+    assert report["errors"][0]["module"] == "partition"
+
+
+def test_patrol_service_marks_failed_above_failure_threshold():
+    store = AssetStore(sqlite3.connect(":memory:"))
+    store.init_schema()
+    store.upsert_table({"name": "ads_fail", "layer": "ads", "owner": "data", "database": "dw"})
+
+    result = PatrolService(store, FailingPatrolLive()).run_daily_p0(
+        "2026-07-16",
+        limit=1,
+        concurrency=1,
+        retry=0,
+        api_delay_seconds=0,
+        failure_threshold=0.3,
+    )
+
+    assert result["status"] == "failed"
+    assert result["checked_count"] == 1
+    assert result["error_count"] == 1
