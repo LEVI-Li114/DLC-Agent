@@ -128,18 +128,26 @@ def main():
             *repair_relation_failures,
             *repair_run_failures,
         ]
-    import_wedata_snapshot(store, snapshot_from_api_dump(dump))
+    imported_snapshot = snapshot_from_api_dump(dump)
+    import_wedata_snapshot(store, imported_snapshot)
+    task_reconcile = store.reconcile_active_tasks([task.get("id", "") for task in task_snapshot["tasks"]])
+    table_reconcile = None
+    if "tables" in dump:
+        table_reconcile = store.reconcile_active_tables(_catalog_table_names(dump["tables"]))
     retention = store.prune_task_runs(int(os.environ.get("DLC_MCP_TASK_RUN_RETENTION_DAYS", "7")))
 
     total = len(tasks_response["Response"]["Data"]["Items"])
     print(f"synced {total} WeData tasks into {db_path}", flush=True)
     print(f"saved raw task dump to {tasks_path}", flush=True)
+    print(f"marked {task_reconcile['deactivated_count']} tasks inactive after task catalog reconciliation", flush=True)
     if "task_instances" in dump:
         run_total = len(dump["task_instances"]["Response"]["Data"]["Items"])
         print(f"synced {run_total} WeData task instances", flush=True)
         print(f"pruned {retention['deleted_count']} task instances older than {retention['cutoff_date']}", flush=True)
     if "tables" in dump:
         print(f"synced table catalog for {_response_item_count(dump['tables'])} tables", flush=True)
+        if table_reconcile:
+            print(f"marked {table_reconcile['deactivated_count']} tables inactive after catalog reconciliation", flush=True)
     if os.environ.get("WEDATA_SYNC_METADATA") == "1":
         print(f"synced metadata details for {_metadata_table_count(metadata_dump)} tables", flush=True)
     if "data_sources" in dump:
@@ -879,28 +887,38 @@ def _sync_metadata(client, project_id, table_names, page_size, work_dir, catalog
     columns = {}
     lineage = []
     quality_rules = []
+    failures = []
 
     total = len(table_names)
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [
-            executor.submit(_sync_one_metadata_table, client, project_id, table_name, page_size, (catalog_tables or {}).get(table_name))
+        futures = {
+            executor.submit(_sync_one_metadata_table, client, project_id, table_name, page_size, (catalog_tables or {}).get(table_name)): table_name
             for table_name in table_names
-        ]
+        }
         for index, future in enumerate(as_completed(futures), start=1):
-            table_name, table, column_response, table_lineage, table_quality_rules = future.result()
+            try:
+                table_name, table, column_response, table_lineage, table_quality_rules, table_failures = future.result()
+            except Exception as exc:
+                table_name = futures[future]
+                failures.append({"table": table_name, "action": "metadata", "error": str(exc)})
+                if index == total or index % 10 == 0:
+                    print(f"synced metadata for {index}/{total} tables failures={len(failures)}", flush=True)
+                continue
             if table:
                 tables.append(table)
             if column_response:
                 columns[table_name] = column_response
             lineage.extend(table_lineage)
             quality_rules.extend(table_quality_rules)
+            failures.extend(table_failures)
             if index == total or index % 10 == 0:
-                print(f"synced metadata for {index}/{total} tables", flush=True)
+                print(f"synced metadata for {index}/{total} tables failures={len(failures)}", flush=True)
 
     payload = {
         "tables": {"Response": {"Data": {"Items": tables}}},
         "lineage": {"Response": {"Data": {"Items": lineage}}},
         "quality_rules": {"Response": {"Data": {"Items": quality_rules}}},
+        "metadata_failures": {"Response": {"Data": {"Items": failures}}},
     }
     path = os.path.join(work_dir, "wedata_metadata.json")
     with open(path, "w", encoding="utf-8") as f:
@@ -915,32 +933,41 @@ def _sync_one_metadata_table(client, project_id, table_name, page_size, catalog_
         table_response = client.call("ListTable", {"PageNumber": 1, "PageSize": 20, "Keyword": table_name})
         matches = [item for item in table_response.get("Response", {}).get("Data", {}).get("Items", []) if item.get("Name") == table_name]
         if not matches:
-            return table_name, None, None, [], []
+            return table_name, None, None, [], [], []
         table = matches[0]
 
     column_response = None
     table_lineage = []
+    failures = []
     guid = table.get("Guid")
     if guid:
         column_response = client.call("GetTableColumns", {"TableGuid": guid})
         table["Columns"] = column_response.get("Response", {}).get("Data") or []
-        lineage_response = _list_all(
+        try:
+            lineage_response = _list_all(
+                client,
+                "ListLineage",
+                {"ResourceUniqueId": guid, "ResourceType": "TABLE", "Direction": "OUTPUT", "Platform": "WEDATA"},
+                page_size,
+            )
+            for item in lineage_response.get("Response", {}).get("Data", {}).get("Items", []) or []:
+                item["QueriedTableName"] = table_name
+                table_lineage.append(item)
+        except Exception as exc:
+            failures.append({"table": table_name, "guid": guid, "action": "ListLineage", "error": str(exc)})
+
+    try:
+        quality_response = _list_all(
             client,
-            "ListLineage",
-            {"ResourceUniqueId": guid, "ResourceType": "TABLE", "Direction": "OUTPUT", "Platform": "WEDATA"},
+            "ListQualityRules",
+            {"ProjectId": project_id, "Filters": [{"Name": "TableName", "Values": [table_name]}]},
             page_size,
         )
-        for item in lineage_response.get("Response", {}).get("Data", {}).get("Items", []) or []:
-            item["QueriedTableName"] = table_name
-            table_lineage.append(item)
-
-    quality_response = _list_all(
-        client,
-        "ListQualityRules",
-        {"ProjectId": project_id, "Filters": [{"Name": "TableName", "Values": [table_name]}]},
-        page_size,
-    )
-    return table_name, table, column_response, table_lineage, quality_response.get("Response", {}).get("Data", {}).get("Items", []) or []
+        table_quality_rules = quality_response.get("Response", {}).get("Data", {}).get("Items", []) or []
+    except Exception as exc:
+        failures.append({"table": table_name, "guid": guid, "action": "ListQualityRules", "error": str(exc)})
+        table_quality_rules = []
+    return table_name, table, column_response, table_lineage, table_quality_rules, failures
 
 
 if __name__ == "__main__":

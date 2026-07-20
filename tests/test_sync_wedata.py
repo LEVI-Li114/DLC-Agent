@@ -187,6 +187,20 @@ class FakeCatalogMetadataClient(FakeMetadataClient):
         return super().call(action, payload)
 
 
+class FakeLineageErrorMetadataClient(FakeMetadataClient):
+    def call(self, action, payload):
+        if action == "ListLineage":
+            return {"Response": {"Error": {"Code": "InternalError", "Message": "temporary unavailable"}}}
+        return super().call(action, payload)
+
+
+class FakeColumnErrorMetadataClient(FakeMetadataClient):
+    def call(self, action, payload):
+        if action == "GetTableColumns" and payload.get("TableGuid") == "bad_guid":
+            raise RuntimeError("GetTableColumns failed: InternalError temporary unavailable")
+        return super().call(action, payload)
+
+
 class FakeChangedTaskClient:
     def __init__(self):
         self.calls = []
@@ -313,6 +327,44 @@ class SyncWeDataTest(unittest.TestCase):
         }
 
         self.assertEqual(_catalog_table_names(response), ["ads_bill_company_1d_di", "dws_360_fin_job_seat_1d_di"])
+
+    def test_reconcile_active_tables_marks_missing_tables_inactive_and_reactivates_seen_table(self):
+        store = AssetStore(sqlite3.connect(":memory:"))
+        store.init_schema()
+        store.upsert_table({"name": "active_table", "layer": "ads"})
+        store.upsert_table({"name": "deleted_table", "layer": "dwd"})
+
+        result = store.reconcile_active_tables(["active_table"])
+
+        self.assertEqual(result["deactivated_count"], 1)
+        self.assertEqual(store.get_table_detail(table_name="active_table")["table"]["is_active"], 1)
+        deleted = store.get_table_detail(table_name="deleted_table")["table"]
+        self.assertEqual(deleted["is_active"], 0)
+        self.assertTrue(deleted["deleted_at"])
+
+        store.upsert_table({"name": "deleted_table", "layer": "dwd"})
+        reactivated = store.get_table_detail(table_name="deleted_table")["table"]
+        self.assertEqual(reactivated["is_active"], 1)
+        self.assertEqual(reactivated["deleted_at"], "")
+
+    def test_reconcile_active_tasks_marks_missing_tasks_inactive_and_reactivates_seen_task(self):
+        store = AssetStore(sqlite3.connect(":memory:"))
+        store.init_schema()
+        store.upsert_task({"id": "active_task", "name": "active"})
+        store.upsert_task({"id": "deleted_task", "name": "deleted"})
+
+        result = store.reconcile_active_tasks(["active_task"])
+
+        self.assertEqual(result["deactivated_count"], 1)
+        self.assertEqual(store.get_task("active_task")["is_active"], 1)
+        deleted = store.get_task("deleted_task")
+        self.assertEqual(deleted["is_active"], 0)
+        self.assertTrue(deleted["deleted_at"])
+
+        store.upsert_task({"id": "deleted_task", "name": "deleted"})
+        reactivated = store.get_task("deleted_task")
+        self.assertEqual(reactivated["is_active"], 1)
+        self.assertEqual(reactivated["deleted_at"], "")
 
     def test_table_change_aliases_prefer_new_env_names(self):
         with patch.dict(
@@ -493,6 +545,40 @@ class SyncWeDataTest(unittest.TestCase):
             )
 
         self.assertEqual(payload["tables"]["Response"]["Data"]["Items"][0]["Columns"], [{"Name": "id"}])
+
+    def test_metadata_sync_records_lineage_error_and_continues(self):
+        with TemporaryDirectory() as tmpdir, redirect_stdout(StringIO()):
+            payload = _sync_metadata(
+                FakeLineageErrorMetadataClient(),
+                "project",
+                ["ads_bill_company_1d_di"],
+                100,
+                tmpdir,
+                {"ads_bill_company_1d_di": {"Name": "ads_bill_company_1d_di", "Guid": "guid_001"}},
+            )
+
+        self.assertEqual(payload["lineage"]["Response"]["Data"]["Items"], [])
+        self.assertEqual(payload["tables"]["Response"]["Data"]["Items"][0]["Columns"], [{"Name": "id"}])
+        self.assertEqual(payload["metadata_failures"]["Response"]["Data"]["Items"][0]["action"], "ListLineage")
+        self.assertIn("InternalError", payload["metadata_failures"]["Response"]["Data"]["Items"][0]["error"])
+
+    def test_metadata_sync_records_worker_exception_and_continues(self):
+        with TemporaryDirectory() as tmpdir, redirect_stdout(StringIO()):
+            payload = _sync_metadata(
+                FakeColumnErrorMetadataClient(),
+                "project",
+                ["bad_table", "good_table"],
+                100,
+                tmpdir,
+                {
+                    "bad_table": {"Name": "bad_table", "Guid": "bad_guid"},
+                    "good_table": {"Name": "good_table", "Guid": "good_guid"},
+                },
+            )
+
+        self.assertEqual([table["Name"] for table in payload["tables"]["Response"]["Data"]["Items"]], ["good_table"])
+        self.assertEqual(payload["metadata_failures"]["Response"]["Data"]["Items"][0]["table"], "bad_table")
+        self.assertIn("GetTableColumns", payload["metadata_failures"]["Response"]["Data"]["Items"][0]["error"])
 
     def test_filter_new_asset_tables_uses_catalog_create_time(self):
         tables = {
