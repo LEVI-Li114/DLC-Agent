@@ -227,7 +227,10 @@ class AssetStore:
                 domain text not null default '',
                 owner text not null default '',
                 description text not null default '',
-                manual_core_level text
+                manual_core_level text,
+                is_active integer not null default 1,
+                last_seen_at text not null default '',
+                deleted_at text not null default ''
             );
             create table if not exists columns (
                 table_name text not null,
@@ -272,7 +275,10 @@ class AssetStore:
                 schedule_time text not null default '',
                 schedule_desc text not null default '',
                 owner text not null default '',
-                status text not null default ''
+                status text not null default '',
+                is_active integer not null default 1,
+                last_seen_at text not null default '',
+                deleted_at text not null default ''
             );
             create table if not exists task_tables (
                 task_id text not null,
@@ -466,8 +472,14 @@ class AssetStore:
         self._add_column_if_missing("tables", "catalog_name", "text not null default ''")
         self._add_column_if_missing("tables", "schema_name", "text not null default ''")
         self._add_column_if_missing("tables", "raw_json", "text not null default '{}'")
+        self._add_column_if_missing("tables", "is_active", "integer not null default 1")
+        self._add_column_if_missing("tables", "last_seen_at", "text not null default ''")
+        self._add_column_if_missing("tables", "deleted_at", "text not null default ''")
         self._add_column_if_missing("tasks", "schedule_time", "text not null default ''")
         self._add_column_if_missing("tasks", "schedule_desc", "text not null default ''")
+        self._add_column_if_missing("tasks", "is_active", "integer not null default 1")
+        self._add_column_if_missing("tasks", "last_seen_at", "text not null default ''")
+        self._add_column_if_missing("tasks", "deleted_at", "text not null default ''")
         self._seed_cloud_api_catalog()
         self.conn.commit()
 
@@ -816,7 +828,7 @@ class AssetStore:
             row = self._one(
                 """
                 select name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level,
-                       project_id, table_type, catalog_name, schema_name, raw_json
+                       project_id, table_type, catalog_name, schema_name, raw_json, is_active, last_seen_at, deleted_at
                 from tables
                 where source_guid = ?
                 """,
@@ -826,7 +838,7 @@ class AssetStore:
             row = self._one(
                 """
                 select name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level,
-                       project_id, table_type, catalog_name, schema_name, raw_json
+                       project_id, table_type, catalog_name, schema_name, raw_json, is_active, last_seen_at, deleted_at
                 from tables
                 where name = ?
                 """,
@@ -843,8 +855,8 @@ class AssetStore:
             """
             insert into tables
                 (name, source_guid, data_source_id, database_name, layer, domain, owner, description, manual_core_level,
-                 project_id, table_type, catalog_name, schema_name, raw_json)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 project_id, table_type, catalog_name, schema_name, raw_json, is_active, last_seen_at, deleted_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), '')
             on conflict(name) do update set
                 source_guid = coalesce(nullif(excluded.source_guid, ''), tables.source_guid),
                 data_source_id = coalesce(nullif(excluded.data_source_id, ''), tables.data_source_id),
@@ -858,7 +870,10 @@ class AssetStore:
                 table_type = coalesce(nullif(excluded.table_type, ''), tables.table_type),
                 catalog_name = coalesce(nullif(excluded.catalog_name, ''), tables.catalog_name),
                 schema_name = coalesce(nullif(excluded.schema_name, ''), tables.schema_name),
-                raw_json = case when excluded.raw_json != '{}' then excluded.raw_json else tables.raw_json end
+                raw_json = case when excluded.raw_json != '{}' then excluded.raw_json else tables.raw_json end,
+                is_active = 1,
+                last_seen_at = datetime('now'),
+                deleted_at = ''
             """,
             (
                 item["name"],
@@ -1008,8 +1023,8 @@ class AssetStore:
     def upsert_task(self, item):
         self.conn.execute(
             """
-            insert into tasks (id, name, task_type, cycle, schedule_time, schedule_desc, owner, status)
-            values (?, ?, ?, ?, ?, ?, ?, ?)
+            insert into tasks (id, name, task_type, cycle, schedule_time, schedule_desc, owner, status, is_active, last_seen_at, deleted_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), '')
             on conflict(id) do update set
                 name = excluded.name,
                 task_type = excluded.task_type,
@@ -1017,7 +1032,10 @@ class AssetStore:
                 schedule_time = excluded.schedule_time,
                 schedule_desc = excluded.schedule_desc,
                 owner = excluded.owner,
-                status = excluded.status
+                status = excluded.status,
+                is_active = 1,
+                last_seen_at = datetime('now'),
+                deleted_at = ''
             """,
             (
                 item["id"],
@@ -1062,6 +1080,44 @@ class AssetStore:
                 commit=False,
             )
         self.conn.commit()
+
+    def reconcile_active_tables(self, table_names):
+        names = sorted({name for name in table_names if name})
+        if not names:
+            return {"deactivated_count": 0, "active_names": 0}
+        self.conn.execute("create temporary table if not exists sync_active_tables (name text primary key)")
+        self.conn.execute("delete from sync_active_tables")
+        self.conn.executemany("insert or ignore into sync_active_tables (name) values (?)", ((name,) for name in names))
+        cursor = self.conn.execute(
+            """
+            update tables
+            set is_active = 0,
+                deleted_at = datetime('now')
+            where is_active = 1
+              and name not in (select name from sync_active_tables)
+            """
+        )
+        self.conn.commit()
+        return {"deactivated_count": cursor.rowcount, "active_names": len(names)}
+
+    def reconcile_active_tasks(self, task_ids):
+        ids = sorted({task_id for task_id in task_ids if task_id})
+        if not ids:
+            return {"deactivated_count": 0, "active_ids": 0}
+        self.conn.execute("create temporary table if not exists sync_active_tasks (id text primary key)")
+        self.conn.execute("delete from sync_active_tasks")
+        self.conn.executemany("insert or ignore into sync_active_tasks (id) values (?)", ((task_id,) for task_id in ids))
+        cursor = self.conn.execute(
+            """
+            update tasks
+            set is_active = 0,
+                deleted_at = datetime('now')
+            where is_active = 1
+              and id not in (select id from sync_active_tasks)
+            """
+        )
+        self.conn.commit()
+        return {"deactivated_count": cursor.rowcount, "active_ids": len(ids)}
 
     def resolve_task(self, task_id="", task_name=""):
         if task_id:

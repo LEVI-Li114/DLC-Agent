@@ -340,7 +340,7 @@ The installer writes one idempotent crontab entry. It runs daily at 08:00 and ca
 0 8 * * * cd /opt/dlc-mcp/DLC-MCP && bash deploy/sync-wedata-incremental.sh /etc/dlc-mcp/env >> /data/dlc-mcp/logs/sync.log 2>&1 # dlc-mcp-wedata-sync
 ```
 
-Daily sync updates the bottom-layer facts used by MCP tools: task catalog and task-table mappings, table catalog, full metadata for tables whose catalog create/update date is yesterday, yesterday's task instances, data sources and related tasks, and refreshed DLC partition facts for candidate partitioned tables.
+Daily sync updates the bottom-layer facts used by MCP tools: task catalog and task-table mappings, table catalog, full metadata for tables whose catalog create/update/structure-update date is yesterday, data sources and related tasks. Task runs and partition facts are disabled by default in the daily batch job because user-facing diagnostics refresh them live; enable them only for explicit backfill/debug runs.
 
 Verify the schedule and logs:
 
