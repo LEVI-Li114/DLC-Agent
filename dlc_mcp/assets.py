@@ -3360,6 +3360,11 @@ def _unknown_layer_issue_detail(table):
 
 
 def _missing_task_mapping_issue_detail(table):
+    if _is_unknown_layer(table) and _has_inferable_layer(table):
+        return (
+            "layer_mapping_gap",
+            "Repair the unknown layer first with refresh_inferred_layers, then re-check producer task mapping.",
+        )
     diagnosis = diagnose_producer_mapping_gap(table)
     return diagnosis["root_cause"], diagnosis["next_check"]
 
