@@ -174,6 +174,29 @@ def test_patrol_service_summary_includes_execution_controls():
     assert result["api_delay_seconds"] == 0
 
 
+def test_daily_core_candidates_exclude_temporary_backup_and_copy_tables():
+    store = AssetStore(sqlite3.connect(":memory:"))
+    store.init_schema()
+    for name in [
+        "ads_360_fin_total_1d_df",
+        "ads_360_fin_total_1d_df_tmp",
+        "ads_360_fin_total_1d_df_bak20250720",
+        "ads_360_fin_total_1d_df_copy",
+        "ads_xtmp_metric_df",
+        "tmp_ads_360_fin_total_1d_df",
+        "tmpx_ads_metric_df",
+    ]:
+        store.upsert_table({"name": name, "layer": "ads", "owner": "tencent", "database": "dw"})
+
+    candidates = PatrolService(store, PatrolLive(store))._daily_core_candidates(10)
+
+    assert [item["name"] for item in candidates] == [
+        "ads_360_fin_total_1d_df",
+        "ads_xtmp_metric_df",
+        "tmpx_ads_metric_df",
+    ]
+
+
 class FailingPatrolLive:
     def sync_table_partitions(self, table_name):
         raise RuntimeError("DescribeTablePartitions failed: InternalError temporary unavailable")

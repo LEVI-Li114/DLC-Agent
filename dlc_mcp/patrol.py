@@ -367,11 +367,12 @@ class PatrolService:
 
     def _persist_table_result(self, run_id, item):
         table = item["table"]
-        for error in item.get("errors", []):
-            self.store.insert_patrol_error({"run_id": run_id, "asset_name": table["name"], "module": error.get("module", ""), "api_action": error.get("api_action", ""), "error_code": error.get("error_code", ""), "error_message": error.get("error_message", ""), "retryable": error.get("retryable", False)})
-        for finding in item.get("findings", []):
-            self.store.insert_patrol_finding({"run_id": run_id, "asset_name": table["name"], "issue_type": finding.get("issue_type", ""), "severity": finding.get("severity", ""), "evidence": {"source": finding.get("source", ""), **(finding.get("evidence") or {})}, "owner_bucket": finding.get("owner_bucket", ""), "suggested_action": finding.get("suggested_action", "")})
-        self.store.upsert_patrol_asset_snapshot({"run_id": run_id, "asset_name": table["name"], "asset_type": "table", "layer": table.get("layer", ""), "owner": table.get("owner", ""), "core_level": (item.get("snapshot", {}).get("cached", {}).get("metadata", {}) or {}).get("core_level", ""), "status": item.get("status", "unknown"), "snapshot": item.get("snapshot") or {}})
+        with self._store_lock:
+            for error in item.get("errors", []):
+                self.store.insert_patrol_error({"run_id": run_id, "asset_name": table["name"], "module": error.get("module", ""), "api_action": error.get("api_action", ""), "error_code": error.get("error_code", ""), "error_message": error.get("error_message", ""), "retryable": error.get("retryable", False)})
+            for finding in item.get("findings", []):
+                self.store.insert_patrol_finding({"run_id": run_id, "asset_name": table["name"], "issue_type": finding.get("issue_type", ""), "severity": finding.get("severity", ""), "evidence": {"source": finding.get("source", ""), **(finding.get("evidence") or {})}, "owner_bucket": finding.get("owner_bucket", ""), "suggested_action": finding.get("suggested_action", "")})
+            self.store.upsert_patrol_asset_snapshot({"run_id": run_id, "asset_name": table["name"], "asset_type": "table", "layer": table.get("layer", ""), "owner": table.get("owner", ""), "core_level": (item.get("snapshot", {}).get("cached", {}).get("metadata", {}) or {}).get("core_level", ""), "status": item.get("status", "unknown"), "snapshot": item.get("snapshot") or {}})
 
     def _scope_candidates(self, scope, limit=50, offset=0, table="", layer="", owner="", core_level=""):
         if scope == "daily_p0":
@@ -420,7 +421,7 @@ class PatrolService:
         return [dict(row) for row in self.store._all(sql, tuple(params))]
 
     def _daily_core_candidates(self, limit, offset=0, layer="", owner="", core_level=""):
-        where = ["layer in ('ods', 'dim', 'dwd', 'dws', 'mid', 'ads')"]
+        where = ["layer in ('ods', 'dim', 'dwd', 'dws', 'mid', 'ads')", "not (" + _temporary_table_predicate("name") + ")"]
         params = []
         if layer:
             where.append("layer = ?")
@@ -450,3 +451,18 @@ class PatrolService:
             (int(limit or 50),),
         )
         return [dict(row) for row in rows]
+
+
+def _temporary_table_predicate(column):
+    return " or ".join(
+        f"lower({column}) like '{pattern}' escape '\\'"
+        for pattern in (
+            'tmp\\_%',
+            '%\\_tmp',
+            '%\\_tmp\\_%',
+            '%\\_bak',
+            '%\\_bak%',
+            '%\\_copy',
+            '%\\_copy%',
+        )
+    )
