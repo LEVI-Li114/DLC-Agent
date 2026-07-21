@@ -3382,6 +3382,116 @@ def _missing_task_runs_issue_detail(table):
     )
 
 
+def diagnose_producer_mapping_gap(context, live_tasks=None, live_error="", evidence_source="cache"):
+    layer = (context.get("layer") or "unknown").lower()
+    task_count = _int_value(context.get("task_count") if "task_count" in context else context.get("total_task_count"))
+    producer_count = _int_value(context.get("producer_task_count"))
+    consumer_count = _int_value(context.get("consumer_task_count"))
+    upstream_count = _int_value(context.get("upstream_count"))
+    downstream_count = _int_value(context.get("downstream_count"))
+    run_count = _int_value(context.get("run_count"))
+
+    evidence = {
+        "layer": layer,
+        "task_count": task_count,
+        "producer_task_count": producer_count,
+        "consumer_task_count": consumer_count,
+        "upstream_count": upstream_count,
+        "downstream_count": downstream_count,
+        "run_count": run_count,
+    }
+    root_cause, reason, next_check = _cache_producer_diagnosis(layer, task_count, producer_count, consumer_count, upstream_count, downstream_count)
+    source = evidence_source or "cache"
+
+    if live_tasks is not None:
+        live_producer_count, live_consumer_count = _live_task_direction_counts(live_tasks)
+        evidence.update(
+            {
+                "cache_producer_task_count": producer_count,
+                "live_producer_task_count": live_producer_count,
+                "live_consumer_task_count": live_consumer_count,
+                "live_checked": True,
+            }
+        )
+        if live_producer_count > 0 and producer_count == 0:
+            root_cause = "cache_stale_or_missing_mapping"
+            reason = "live 证据可找到产出任务，但本地 task_tables 缓存没有 producer 映射。"
+            next_check = "刷新 task_tables 缓存或修复同步链路，live 已能找到产出任务。"
+            source = "cache+live" if source == "cache" else source
+    elif live_error:
+        evidence.update({"live_checked": False, "live_error": str(live_error)})
+        if _producer_evidence_insufficient(layer, task_count, producer_count, upstream_count, downstream_count):
+            root_cause = "live_evidence_unavailable"
+            reason = "缓存证据不足，且 live 产出任务补证失败。"
+            next_check = "重试 live ListTasks / get_table_tasks_live；若仍失败，再检查任务同步链路和 SQL 解析。"
+
+    return {
+        "root_cause": root_cause,
+        "reason": reason,
+        "evidence_source": source,
+        "evidence": evidence,
+        "next_check": next_check,
+    }
+
+
+def _cache_producer_diagnosis(layer, task_count, producer_count, consumer_count, upstream_count, downstream_count):
+    if producer_count > 0:
+        return (
+            "producer_present_run_missing",
+            "该表已存在 output/producer 任务，问题应转向运行实例诊断。",
+            "检查 ListTaskInstances 时间窗口、关键词、分页和 task_id 对齐。",
+        )
+    if layer in {"", "unknown"}:
+        return (
+            "unknown_layer_first",
+            "表仍在 unknown 层，producer 缺失判断不可靠。",
+            "先运行 layer 推断或人工确认层级，再复查 producer task 映射。",
+        )
+    if consumer_count > 0:
+        return (
+            "consumer_only_mapping",
+            "该表有关联任务，但全部是 input/consumer，没有 output/producer。",
+            "检查任务 outputs、SQL INSERT/CREATE 解析和表名标准化，确认该表的产出任务是否漏识别。",
+        )
+    if task_count == 0 and upstream_count + downstream_count > 0:
+        return (
+            "lineage_without_task_mapping",
+            "该表有血缘关系，但没有任何 task_tables 任务映射。",
+            "检查血缘来源任务、ListTasks inputs/outputs 和 SQL 解析是否没有写入 task_tables。",
+        )
+    if task_count == 0 and upstream_count + downstream_count == 0:
+        return (
+            "no_lineage_no_task_mapping",
+            "该表没有血缘和任务映射，可能是孤立表、缓存缺失、暂不支持或疑似废弃。",
+            "先确认表是否仍在使用；若仍使用，再补查数据源、任务同步和 live 任务证据。",
+        )
+    return (
+        "producer_missing_gap",
+        "该表位于有效数仓层，但当前没有识别到 output/producer 任务。",
+        "检查任务 outputs、SQL INSERT/CREATE 解析和表名标准化。",
+    )
+
+
+def _int_value(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _live_task_direction_counts(live_tasks):
+    if not isinstance(live_tasks, dict):
+        return 0, 0
+    tasks = live_tasks.get("tasks") or live_tasks.get("results") or live_tasks.get("raw", {}).get("tasks") or []
+    producer_count = len([item for item in tasks if item.get("direction") in {"output", "producer", "produces"}])
+    consumer_count = len([item for item in tasks if item.get("direction") in {"input", "consumer", "consumes"}])
+    return producer_count, consumer_count
+
+
+def _producer_evidence_insufficient(layer, task_count, producer_count, upstream_count, downstream_count):
+    return layer not in {"", "unknown"} and producer_count == 0 and (task_count == 0 or upstream_count + downstream_count > 0)
+
+
 def _governance_issues_for_table(table):
     issues = []
     if _is_unknown_layer(table):

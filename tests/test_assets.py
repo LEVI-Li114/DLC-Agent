@@ -602,6 +602,71 @@ class AssetStoreTest(unittest.TestCase):
         self.assertIn("有产出任务但缺运行实例", by_name["ads_has_output_no_run"]["gaps"])
         self.assertNotIn("ads_has_output_run", by_name)
 
+    def test_diagnose_producer_mapping_gap_classifies_cache_root_causes(self):
+        from dlc_mcp.assets import diagnose_producer_mapping_gap
+
+        cases = [
+            (
+                {"name": "mystery_table", "layer": "unknown", "task_count": 0, "producer_task_count": 0},
+                "unknown_layer_first",
+            ),
+            (
+                {"name": "ads_input_only", "layer": "ads", "task_count": 2, "consumer_task_count": 2, "producer_task_count": 0},
+                "consumer_only_mapping",
+            ),
+            (
+                {"name": "ads_lineage_only", "layer": "ads", "task_count": 0, "producer_task_count": 0, "upstream_count": 1, "downstream_count": 0},
+                "lineage_without_task_mapping",
+            ),
+            (
+                {"name": "ads_isolated", "layer": "ads", "task_count": 0, "producer_task_count": 0, "upstream_count": 0, "downstream_count": 0},
+                "no_lineage_no_task_mapping",
+            ),
+            (
+                {"name": "ads_generic", "layer": "ads", "task_count": 1, "producer_task_count": 0, "consumer_task_count": 0},
+                "producer_missing_gap",
+            ),
+            (
+                {"name": "ads_has_producer", "layer": "ads", "task_count": 1, "producer_task_count": 1, "run_count": 0},
+                "producer_present_run_missing",
+            ),
+        ]
+
+        for context, expected_root_cause in cases:
+            with self.subTest(expected_root_cause=expected_root_cause):
+                diagnosis = diagnose_producer_mapping_gap(context)
+                self.assertEqual(diagnosis["root_cause"], expected_root_cause)
+                self.assertEqual(diagnosis["evidence_source"], "cache")
+                self.assertIn("next_check", diagnosis)
+                self.assertIn("producer_task_count", diagnosis["evidence"])
+
+    def test_diagnose_producer_mapping_gap_uses_live_evidence_when_cache_is_stale(self):
+        from dlc_mcp.assets import diagnose_producer_mapping_gap
+
+        diagnosis = diagnose_producer_mapping_gap(
+            {"name": "ads_live_has_output", "layer": "ads", "task_count": 0, "producer_task_count": 0},
+            live_tasks={"tasks": [{"id": "task_1", "name": "build_ads", "direction": "output"}]},
+        )
+
+        self.assertEqual(diagnosis["root_cause"], "cache_stale_or_missing_mapping")
+        self.assertEqual(diagnosis["evidence_source"], "cache+live")
+        self.assertEqual(diagnosis["evidence"]["cache_producer_task_count"], 0)
+        self.assertEqual(diagnosis["evidence"]["live_producer_task_count"], 1)
+        self.assertTrue(diagnosis["evidence"]["live_checked"])
+
+    def test_diagnose_producer_mapping_gap_reports_live_unavailable_when_requested_but_failed(self):
+        from dlc_mcp.assets import diagnose_producer_mapping_gap
+
+        diagnosis = diagnose_producer_mapping_gap(
+            {"name": "ads_need_live", "layer": "ads", "task_count": 0, "producer_task_count": 0, "upstream_count": 1},
+            live_error="ListTasks failed: InternalError temporary unavailable",
+        )
+
+        self.assertEqual(diagnosis["root_cause"], "live_evidence_unavailable")
+        self.assertEqual(diagnosis["evidence_source"], "cache")
+        self.assertFalse(diagnosis["evidence"]["live_checked"])
+        self.assertIn("InternalError", diagnosis["evidence"]["live_error"])
+
     def test_prune_task_runs_keeps_only_recent_seven_calendar_days(self):
         store = make_store()
         for day in ("2026-07-06", "2026-07-07", "2026-07-13"):
